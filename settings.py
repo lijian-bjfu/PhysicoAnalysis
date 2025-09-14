@@ -1,0 +1,108 @@
+# 需要安装依赖：pip install wfdb pandas numpy scipy neurokit2 matplotlib
+
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).parent
+DATA_DIR = PROJECT_ROOT / "data"
+PROCESSED_DIR = DATA_DIR / "processed"
+FEATURES_DIR = DATA_DIR / "features"
+REPORTS_DIR = PROJECT_ROOT / "reports" / "figures"
+VERBOSE = True
+CACHE_RAW = True
+RAW_CACHE_DIR = DATA_DIR / "raw" / "physionet" / "fantasia"
+
+# 选择要跑的数据集（支持多个），每个dataset声明来源与参数
+DATASETS = [
+    {
+        "name": "fantasia_demo",
+        "source": "fantasia",         # 调用 scripts/loaders/fantasia_loader.py
+        "records": [], # 如果选择性下载，用 ["f1y01", "f1o01"] 的方式
+        "age_group_map": {"y": "young", "o": "old"},
+    },
+    # 也可加自定义CSV来源（示例）
+    # {
+    #   "name": "custom_demo",
+    #   "source": "custom_csv",
+    #   "csv_glob": "data/raw/custom/*.csv",
+    # }
+]
+
+# 清洗与分窗参数（全局）
+PARAMS = {
+    "rr_artifact_threshold": 0.20,   # 相邻RR变化率>20% → 伪迹，非静息时，阈值放宽
+    "hr_min_max_bpm": (35, 140),
+    "rr_fix_strategy": "delete",     # 'delete' or 'interp'
+    "window_sec": 300,               # 标准5分钟
+    "overlap_sec": 0,
+    "simulate_T0_T3": False,         # 若True: 5/4/5/5/5/5分的伪T0–T3
+    "hf_band": (0.15, 0.40),
+    "use_individual_hf": True,
+    "hf_band_radius_hz": 0.05,
+    "log_power": True,
+    "valid_rr_ratio_min": 0.80,
+    "require_5min_for_freq": True,
+}
+
+# 清洗后单被试 RR 表（2clean_<sid>.csv / .parquet）
+RR_CLEAN_LABELS = {
+    "t_s": "本次心搏的对齐时间（秒，基于原始ECG时间轴中R峰的第二个及以后峰值）",
+    "rr_ms": "相邻心搏间期（毫秒），应用修正策略后的最终数值（delete不改值、interp为插值）",
+    "hr_bpm": "由 rr_ms 换算的心率（每分钟心跳数），等于 60000 / rr_ms",
+    "valid": "是否用于下游分析的有效标记；在 delete 策略下等于非伪迹，在 interp 策略下一律为 True",
+    "flagged": "是否被任何伪迹规则标记（True/False），仅用于透明化，不等同于是否纳入分析",
+    "flag_delta": "是否因“相邻RR相对变化超过阈值”被标记（True/False），阈值见 PARAMS['rr_artifact_threshold']",
+    "flag_hr": "是否因“心率越界”被标记（True/False），上下界见 PARAMS['hr_min_max_bpm']",
+    "flag_reason": "伪迹原因字符串：'delta'、'hr'、'delta|hr' 或空字符串",
+    "n_rr_corrections": "从序列开始累计被标记次数的计数（单调递增），用于快速定位伪迹密集区"
+}
+
+# 清洗汇总表（2clean_summary.csv）
+RR_CLEAN_SUMMARY_LABELS = {
+    "subject_id": "被试编号（与原始记录名一致）",
+    "n_rr": "该被试的RR条目总数（心搏对数）",
+    "n_flagged": "被伪迹规则标记的RR条目数（flagged为True的计数）",
+    "pct_flagged": "被标记条目的百分比（100 * n_flagged / n_rr，保留两位小数）",
+    "n_flag_delta": "因delta规则（相邻RR相对变动超阈）被标记的条目数",
+    "n_flag_hr": "因hr规则（心率越界）被标记的条目数",
+    "n_valid": "最终用于分析的RR条目数（delete：n_rr - n_flagged；interp：等于n_rr）",
+    "pct_valid": "有效RR占比（100 * n_valid / n_rr）",
+    "strategy": "采用的修正策略（'delete' 删除伪迹行；'interp' 插值覆盖伪迹行）"
+}
+
+# RR 伪迹人工复查表（data/processed/review/rr_flags_<sid>.csv）
+RR_REVIEW_LABELS = {
+    "t_s": "心搏时间戳（秒），与清洗后RR表可一一对齐",
+    "rr_ms": "当前RR（毫秒），在delete策略下为原始RR，在interp策略下为已插值值",
+    "hr_bpm": "由rr_ms换算的心率（每分钟）",
+    "flag_delta": "该条是否因delta规则被标记",
+    "flag_hr": "该条是否因hr规则被标记",
+    "flag_reason": "伪迹原因字符串：'delta'、'hr' 或 'delta|hr'",
+    "rule_delta_thr": "delta规则使用的相邻RR相对变化阈值（来自PARAMS['rr_artifact_threshold']）",
+    "hr_bpm_raw_minmax": "心率越界判定使用的上下界（来自PARAMS['hr_min_max_bpm']）",
+    "keep": "人工复核保留标记（留空=不改变；1=强制设为有效）",
+    "rr_ms_override": "人工给出的RR替代值（毫秒，正数才生效），用于手动修正异常RR"
+}
+
+# 输出列说明
+OUTPUT_LABELS = {
+    "subject_id": "被试唯一标识（字符串，例如 'sub-0001'）",
+    "age_group": "年龄组（young / old / unknown）",
+    "window_id": "时间窗口编号（如 'win-001' 或 'T2b'）",
+    "window_start_s": "窗口起始时间（秒，记录起点=0）",
+    "window_dur_s": "窗口时长（秒；5分钟=300）",
+    "valid_rr_ratio": "有效RR占比（0–1；≥0.80 推荐有效）",
+    "n_rr_corrections": "RR校正次数（删除/插值的心搏数量）",
+    "window_valid": "窗口有效标记（布尔）",
+    "resp_rate_bpm": "呼吸频率（次/分；缺失则留空）",
+    "hf_band_used": "HF频带类型（fixed/individual）",
+    "hf_center_hz": "个体化HF中心频率（Hz）",
+    "mean_hr_bpm": "平均心率（次/分）",
+    "rmssd_ms": "RMSSD（毫秒）",
+    "sdnn_ms": "SDNN（毫秒）",
+    "pnn50_pct": "pNN50（百分比）",
+    "sd1_ms": "SD1（毫秒）",
+    "sd2_ms": "SD2（毫秒）",
+    "hf_log_ms2": "HF功率自然对数 ln(ms²)",
+    "lf_log_ms2": "LF功率自然对数 ln(ms²)",
+    "rsa_ms": "RSA（毫秒；可缺）",
+}
