@@ -1,0 +1,102 @@
+<!--#set var="TITLE" value="Fantasia Database Subset"-->
+<!--#set var="USELOCALCSS" value="1"-->
+<!--#include virtual="/head.shtml"-->
+
+
+<div class="notice">
+<p>This &ldquo;mini-collection&rdquo; of human heart rate data was constructed as a teaching
+resource for an intensive course (&ldquo;The Modern Science of Human Aging&rdquo;,
+conducted at MIT in October, 1999 under the auspices of <a
+href="http://necsi.edu/">NECSI</a>).  As such, this specific collection is
+not intended for basic research or publications, for which the <a
+href="../">complete database</a>, also available here, may be better suited.
+It may be useful, however, in other classroom or tutorial settings, and for
+self-guided explorations into the world of biologic complexity.</p>
+</div>
+
+<p>
+This collection consists of 10 heart beat time series: 5 young subjects
+(Y1.txt, Y2.txt, etc) and 5 elderly subjects (O1.txt, O2.txt, etc) from
+the <a href="../">Fantasia Database</a>.
+You may download <a href="heartbeat.tar">heartbeat.tar</a>&nbsp;(<!--#fsize file="heartbeat.tar" -->),&nbsp;a UNIX tar archive
+of this entire mini-collection, also available in gzip-compressed form as
+<a href="heartbeat.tar.gz">heartbeat.tar.gz</a>&nbsp;(<!--#fsize file="heartbeat.tar.gz" -->).  If you prefer,
+you may download individual recordings:
+
+<div class="edbtable">
+<table  style="width: 60%;">
+<tr><th >Old</th>
+<th >Young</th></tr>
+<tr><td><a href="O1.txt">O1.txt</a>
+(<a href="o1.hea">o1.hea</a>, <a href="o1.qrs">o1.qrs</a>)</td>
+<td><a href="Y1.txt">Y1.txt</a>
+(<a href="y1.hea">y1.hea</a>, <a href="y1.qrs">y1.qrs</a>)</td>
+</tr>
+
+<tr><td><a href="O2.txt">O2.txt</a>
+(<a href="o2.hea">o2.hea</a>, <a href="o2.qrs">o2.qrs</a>)</td>
+<td><a href="Y2.txt">Y2.txt</a>
+(<a href="y2.hea">y2.hea</a>, <a href="y2.qrs">y2.qrs</a>)</td>
+</tr>
+
+<tr><td><a href="O3.txt">O3.txt</a>
+(<a href="o3.hea">o3.hea</a>, <a href="o3.qrs">o3.qrs</a>)</td>
+<td><a href="Y3.txt">Y3.txt</a>
+(<a href="y3.hea">y3.hea</a>, <a href="y3.qrs">y3.qrs</a>)</td>
+</tr>
+
+<tr><td><a href="O4.txt">O4.txt</a>
+(<a href="o4.hea">o4.hea</a>, <a href="o4.qrs">o4.qrs</a>)</td>
+<td><a href="Y4.txt">Y4.txt</a>
+(<a href="y4.hea">y4.hea</a>, <a href="y4.qrs">y4.qrs</a>)</td>
+</tr>
+
+<tr><td><a href="O5.txt">O5.txt</a>
+(<a href="o5.hea">o5.hea</a>, <a href="o5.qrs">o5.qrs</a>)</td>
+<td><a href="Y5.txt">Y5.txt</a>
+(<a href="y5.hea">y5.hea</a>, <a href="y5.qrs">y5.qrs</a>)</td>
+</td></tr>
+</table>
+</div>
+
+<p>
+Records <tt>O1</tt> - <tt>O5</tt> and <tt>Y1</tt> - <tt>Y5</tt> of this subset
+correspond to records <tt>f1o01</tt> - <tt>f1o05</tt> and <tt>f1y01</tt> -
+<tt>f1y05</tt> of the Fantasia Database, which also includes the ECG and
+respiration signals for these recordings.</p>
+
+<p>
+Each <tt>.txt</tt> file contains one column of data, consisting of interbeat
+intervals (in seconds).  The <tt>.hea</tt> (text header) and <tt>.qrs</tt>
+(binary annotation) files contain the same data as in the <tt>.txt</tt> files,
+written in the standard formats used for other PhysioBank databases.  The
+<tt>.tar</tt> and <tt>.tar.gz</tt> archives include only the <tt>.txt</tt>
+files.  The length of each recording is approximately 2 hours.</p>
+
+<p>
+Five young (21 - 34 years old) and five elderly (68 - 81 years old)
+rigorously-screened healthy subjects underwent 120 minutes of
+continuous supine resting while continuous electrocardiographic (ECG)
+signals were collected.</p>
+
+<p>
+All subjects remained in a resting state in sinus rhythm while
+watching the movie
+<a href="http://imdb.com/Title?0032455" target="other"><i>Fantasia</i></a> (Disney, 1940) to help maintain wakefulness. The
+continuous ECG was digitized at 250 Hz. Each heartbeat was annotated
+using an automated arrhythmia detection algorithm, and each beat
+annotation was verified by visual inspection. The R-R interval
+(interbeat interval) time series for each subject was then computed.</p>
+
+<h2>Reference</h2>
+<p>
+These 10 time series form a subset of the <a href="../">complete database</a>
+described in:</p>
+
+<div class="reference">
+Iyengar N, Peng C-K, Morin R, Goldberger AL, Lipsitz LA. 
+Age-related alterations in the fractal scaling of cardiac
+interbeat interval dynamics. <i>Am J Physiol</i> 1996;<b>271</b>:1078-1084.
+</div> <!-- end reference -->
+
+<!--#include virtual="/dir-footer.shtml"-->
