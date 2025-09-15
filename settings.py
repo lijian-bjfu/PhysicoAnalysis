@@ -20,18 +20,8 @@ DATA_DIR      = PROJECT_ROOT / "data"
 PROCESSED_DIR = DATA_DIR / "processed"
 RAW_CACHE_DIR = DATA_DIR / "raw" / ("physionet/fantasia" if DATA_SOURCE=="fantasia" else "local")
 
-# 导入器关键词（给 1_data_norm.py 用）
-# 信号别名（用于 detect_signal）
-SIGNAL_ALIASES = {
-    "ecg":   ["ecg"],
-    "rr":    ["rr","ibi","ppi"],
-    "hr":    ["hr","bpm","heart_rate"],
-    "resp":  ["resp","respiration","breath","breathing"],
-    "ppg":   ["ppg","bvp"],
-    "acc":   ["acc","accelerometer","accel"],
-    # "events":["events","event","marker","mark","trigger","onset"]
-}
-DEVICE_TAGS = {"h10":"h", "verity":"v"}
+# 指定数据集
+ACTIVE_DATA = "fantasia"
 
 DATASETS = {
     "local": {
@@ -46,21 +36,31 @@ DATASETS = {
     },
     "fantasia": {
         "loader": "scripts.loaders.fantasia_loader",
-        "root":   "raw/antasia",
+        "root":   "raw/fantasia",
         "events": None,
         "options": {
-            "records": [],                               # 空=自动枚举；也可列 ["f1o05","f1o06",...]
-            "signals": ["ecg","resp"],                   # 要落盘的信号
-            "prefer_local_wfdb": True,                   # 有 .hea/.dat/.ecg 就本地解析
-            "allow_network": False,                      # 禁止联网（你已有 subset）
-            "cache_format": "parquet"                    # 产 <sid>_ecg.parquet / <sid>_resp.parquet
+            "records": [],                   # 空=对所有被试数据处理；也可列 ["f1o05","f1o06",...]
+            "signals": ["ecg","resp"],       # 要落盘的信号
+            "prefer_local_wfdb": True,       # 有 .hea/.dat/.ecg 就本地解析
+            "allow_network": False,          # 禁止联网（你已有 subset）
+            "cache_format": "parquet"        # 产 <sid>_ecg.parquet / <sid>_resp.parquet
         }
     }
     # "wesad": {...} 以后你加
 }
 
-# 指定数据集
-ACTIVE_DATA = "fantasia"
+# 导入器关键词（给 1_data_norm.py 用）
+# 信号别名（用于 detect_signal）
+SIGNAL_ALIASES = {
+    "ecg":   ["ecg"],
+    "rr":    ["rr","ibi","ppi"],
+    "hr":    ["hr","bpm","heart_rate"],
+    "resp":  ["resp","respiration","breath","breathing"],
+    "ppg":   ["ppg","bvp"],
+    "acc":   ["acc","accelerometer","accel"],
+    # "events":["events","event","marker","mark","trigger","onset"]
+}
+DEVICE_TAGS = {"h10":"h", "verity":"v"}
 
 
 # RR 选择阈值（给 2a_select_rr.py）

@@ -1,151 +1,179 @@
 # scripts/loaders/fantasia_loader.py
-# 使用 Fantasia loader 的注意事项:
-#
-# 1) 本地优先还是在线优先？
-#    - 代码会先在本地 RAW_CACHE_DIR 查找 **官方WFDB原始文件**（成对的 .hea/.dat）。
-#      如果找到，就本地读取；找不到才会去 PhysioNet 远端（pn_dir="fantasia"）下载读取。
-#
-# 2) 本地文件该放哪里、叫什么名？
-#    - 目录：settings.RAW_CACHE_DIR，默认是 data/raw/physionet/fantasia/
-#    - 文件名必须是 官方基名：
-#        f1y01.hea 与 f1y01.dat
-#        f1o01.hea 与 f1o01.dat
-#      也就是说：<记录名>.hea 与 <记录名>.dat 必须同目录同名成对存在。
-#    - 只要 .hea 存在而 .dat 缺失，WFDB 也读不动；两个都要有。
-#
-# 3) 别把本地路径传给 pn_dir
-#    - 本地读取应传 **完整本地路径+记录名** 给 rdrecord：wfdb.rdrecord(str(local_dir / rec))
-#    - 不要把本地目录当 pn_dir 传，否则 WFDB 会把它当“远端子目录”拼 URL，报 404。
-#
-# 4) 缓存的 parquet 是额外福利，不是必需品
-#    - 本 loader 会把每条记录的 ecg/resp 另存为：
-#        data/raw/physionet/fantasia/<记录名>_ecg.parquet
-#        data/raw/physionet/fantasia/<记录名>_resp.parquet
-#      这是为了二次读取快一些；删了也不影响“用 .hea/.dat 读原始”的主流程。
-#    - 注意：仅有 parquet 而无 .hea/.dat 时，loader 仍会尝试在线读取。
-#
-# 5) 记录名单怎么控制？
-#    - 在 settings.DATASETS[*]["records"] 指定列表（如 ["f1y01","f1o01"]）只读这些；
-#      留空或不写该键，则自动读取 **全库**（优先本地有的，剩下走远端）。
-#
-# 6) 目录结构示例（推荐）：
-#    data/
-#      raw/
-#        physionet/
-#          fantasia/
-#            f1y01.hea
-#            f1y01.dat
-#            f1o01.hea
-#            f1o01.dat
-#            f1y01_ecg.parquet      # 由 loader 自动生成，可有可无
-#            f1y01_resp.parquet     # 由 loader 自动生成，可有可无
-#
-# 7) 常见报错速查：
-#    - NetFileNotFoundError (404)：多半是把本地目录误传给了 pn_dir；或 .hea/.dat 缺一半。
-#    - 读到的通道没有 ECG/Resp：检查记录是否来自 Fantasia，或通道名是否与官方一致。
-
 import pandas as pd
 import numpy as np
 import wfdb
-
-# --- project-root bootstrap ---
-import sys
 from pathlib import Path
-_p = Path(__file__).resolve()
-for _ in range(6):  # 最多向上爬6层
-    if (_p.parent / "settings.py").exists():
-        sys.path.insert(0, str(_p.parent))
-        break
-    _p = _p.parent
-# --- end bootstrap ---
-from settings import VERBOSE, CACHE_RAW, RAW_CACHE_DIR
 
-# —— 官方完整名单获取（失败就退回静态列表） ——
-_STATIC_RECORDS = [
-    # elderly f1o**, f2o**
-    "f1o01","f1o02","f1o03","f1o04","f1o05","f1o06","f1o07","f1o08","f1o09","f1o10",
-    "f2o01","f2o02","f2o03","f2o04","f2o05","f2o06","f2o07","f2o08","f2o09","f2o10",
-    # young f1y**, f2y**
-    "f1y01","f1y02","f1y03","f1y04","f1y05","f1y06","f1y07","f1y08","f1y09","f1y10",
-    "f2y01","f2y02","f2y03","f2y04","f2y05","f2y06","f2y07","f2y08","f2y09","f2y10",
-]
+# --- helpers ---
+def _resolve_root(data_dir: Path, root_str: str) -> Path:
+    p = Path(root_str)
+    return p if p.is_absolute() else (data_dir / p)
 
-def _list_all_records():
-    try:
-        recs = wfdb.get_record_list('fantasia')  # 官方 RECORDS 索引
-        recs = [r.strip() for r in recs if r.strip()]
-        if len(recs) >= 40:
-            if VERBOSE: print(f"[fantasia] found {len(recs)} records from PhysioNet index.")
-            return recs
-    except Exception as e:
-        if VERBOSE: print(f"[fantasia] get_record_list failed, fallback to static list. ({e})")
-    return _STATIC_RECORDS
+def _discover_records(root: Path, options: dict) -> list[str]:
+    """优先从已缓存的 *_ecg.parquet 推断被试；否则从 .hea 推断；否则用 options['records']。"""
+    cached = sorted({p.stem.split("_")[0] for p in root.glob("*_ecg.parquet")})
+    if cached:
+        return cached
+    heads = sorted({p.stem for p in root.glob("*.hea")})
+    if heads:
+        return heads
+    return options.get("records", []) or []
 
-def _rdrecord_local_or_remote(rec: str):
-    # 本地优先：如果 RAW_CACHE_DIR 下有 f1y01.hea，就从本地读
-    local_dir = RAW_CACHE_DIR
-    hea = local_dir / f"{rec}.hea"
-    if hea.exists():
-        if VERBOSE:
-            print(f"          local WFDB → {hea}")
-        # 关键修正：本地读不要用 pn_dir，直接给“完整路径/记录名”
-        # WFDB 会自动去找同目录下的 .dat/.hea
-        return wfdb.rdrecord(str(local_dir / rec))
-    # 否则走在线目录（pn_dir 用数据库名）
-    return wfdb.rdrecord(rec, pn_dir="fantasia")
+def _save_continuous(sid: str, sig: str, values: np.ndarray, fs: float, root: Path, cache_fmt: str) -> Path:
+    n = len(values)
+    t = np.arange(n, dtype=float) / float(fs)
+    df = pd.DataFrame({"time_s": t, "value": values.astype(float), "fs_hz": float(fs)})
+    out = root / f"{sid}_{sig}.{ 'parquet' if cache_fmt=='parquet' else 'csv' }"
+    if cache_fmt == "parquet":
+        df.to_parquet(out, index=False)
+    else:
+        df.to_csv(out, index=False)
+    return out
 
+def _summary_of_cached(path: Path) -> tuple[float, float, int]:
+    df = pd.read_parquet(path) if path.suffix==".parquet" else pd.read_csv(path)
+    dur = float(df["time_s"].max()) if len(df) else 0.0
+    fs  = float(df["fs_hz"].iloc[0]) if "fs_hz" in df.columns and len(df) else float("nan")
+    return fs, dur, len(df)
+
+# --- main entry ---
 def load(dataset_cfg: dict, data_dir: Path) -> pd.DataFrame:
-    # 记录列表：settings 里指定的，否则全库
-    records = dataset_cfg.get("records")
+    """
+    保存到 DATASETS['fantasia']['root'] 下：
+      <sid>_ecg.parquet  (time_s,value,fs_hz)
+      <sid>_resp.parquet (time_s,value,fs_hz)
+    并返回一个轻量 summary DataFrame（不会拼巨大长表）。
+    """
+    root    = _resolve_root(data_dir, dataset_cfg["root"])
+    opts    = dataset_cfg.get("options", {}) or {}
+    signals = opts.get("signals", ["ecg","resp"])
+    allow_net = bool(opts.get("allow_network", False))
+    prefer_local = bool(opts.get("prefer_local_wfdb", True))
+    cache_fmt = str(opts.get("cache_format", "parquet")).lower()
+
+    root.mkdir(parents=True, exist_ok=True)
+
+    # 发现记录
+    records = _discover_records(root, opts)
     if not records:
-        records = _list_all_records()
+        print("[fantasia] 没找到任何记录。请在 settings.DATASETS['fantasia']['root'] 放置 .hea/.dat 或已有 *_ecg.parquet。")
+        return pd.DataFrame(columns=["subject_id","signal","source","fs_hz","dur_s","n_rows","path"])
 
-    age_map = dataset_cfg.get("age_group_map", {})
-    if CACHE_RAW:
-        RAW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[fantasia] found {len(records)} records under {root}")
 
-    dfs = []
-    n = len(records)
-    for i, rec in enumerate(records, 1):
-        if VERBOSE:
-            print(f"[fantasia] [{i}/{n}] reading '{rec}' ...", flush=True)
-        record = _rdrecord_local_or_remote(rec)
-        fs = float(record.fs)
-        t = np.arange(record.sig_len) / fs
+    first_subject_schema_printed = False
+    rows = []
 
-        signals = {}
-        for ch_idx, ch_name in enumerate(record.sig_name):
-            name = ch_name.upper()
-            if "ECG" in name:
-                signals["ecg"] = record.p_signal[:, ch_idx]
-            elif "RESP" in name:
-                signals["resp"] = record.p_signal[:, ch_idx]
+    for i, sid in enumerate(records, 1):
+        print(f"[fantasia] [{i}/{len(records)}] subject '{sid}'")
 
-        age_group = _infer_age_group(rec, age_map)
+        # 1) 缓存优先：若已存在 *_ecg.parquet/_resp.parquet 就直接读取概览
+        cached_any = False
+        for sig in signals:
+            cached = root / f"{sid}_{sig}.parquet"
+            if cached.exists():
+                cached_any = True
+                fs, dur, n = _summary_of_cached(cached)
+                print(f"          cached → {cached}  (fs={fs:.0f} Hz, dur≈{dur:.0f}s, n={n})")
+                rows.append({"subject_id": sid, "signal": sig, "source": "cache",
+                             "fs_hz": fs, "dur_s": dur, "n_rows": n, "path": str(cached)})
 
-        for sig, arr in signals.items():
-            df = pd.DataFrame({
-                "subject_id": rec,
-                "age_group": age_group,
-                "signal": sig,
-                "fs_hz": fs,
-                "time_s": t,
-                "value": arr.astype(float),
-            })
-            dfs.append(df)
+        # 如果所需信号全都已有缓存，且已经打印了，跳过解析
+        if all((root / f"{sid}_{sig}.parquet").exists() for sig in signals):
+            # 只对第一个被试打印一次“列命名提示”
+            if not first_subject_schema_printed:
+                print("          [schema] columns for cached continuous signals: ['time_s','value','fs_hz']")
+                first_subject_schema_printed = True
+            continue
 
-            if CACHE_RAW:
-                out_path = RAW_CACHE_DIR / f"{rec}_{sig}.parquet"
-                df.to_parquet(out_path, index=False)
-                if VERBOSE:
-                    dur = t[-1] if len(t) else 0
-                    print(f"          cached → {out_path}  (fs={fs:.0f} Hz, dur≈{dur:.0f}s, n={len(df)})", flush=True)
+        # 2) 本地 WFDB：有 .hea/.dat/.ecg 就解析
+        parsed = False
+        if prefer_local:
+            hea = root / f"{sid}.hea"
+            dat = root / f"{sid}.dat"
+            if hea.exists() and dat.exists():
+                try:
+                    rec = wfdb.rdrecord(str(root / sid))
+                    fs = float(rec.fs)
+                    # 挑通道：名字里含 ECG/RESP 的
+                    name_map = {nm.upper(): idx for idx, nm in enumerate(rec.sig_name)}
+                    for want in signals:
+                        if want == "ecg":
+                            ch = None
+                            for k in name_map:
+                                if "ECG" in k:
+                                    ch = name_map[k]; break
+                            if ch is not None:
+                                arr = rec.p_signal[:, ch]
+                                out = _save_continuous(sid, "ecg", arr, fs, root, cache_fmt)
+                                fs2, dur2, n2 = _summary_of_cached(out)
+                                print(f"          parsed(local) → {out}  (fs={fs2:.0f} Hz, dur≈{dur2:.0f}s, n={n2})")
+                                rows.append({"subject_id": sid, "signal": "ecg", "source": "wfdb_local",
+                                             "fs_hz": fs2, "dur_s": dur2, "n_rows": n2, "path": str(out)})
+                                parsed = True
+                        elif want == "resp":
+                            ch = None
+                            for k in name_map:
+                                if "RESP" in k:
+                                    ch = name_map[k]; break
+                            if ch is not None:
+                                arr = rec.p_signal[:, ch]
+                                out = _save_continuous(sid, "resp", arr, fs, root, cache_fmt)
+                                fs2, dur2, n2 = _summary_of_cached(out)
+                                print(f"          parsed(local) → {out}  (fs={fs2:.0f} Hz, dur≈{dur2:.0f}s, n={n2})")
+                                rows.append({"subject_id": sid, "signal": "resp", "source": "wfdb_local",
+                                             "fs_hz": fs2, "dur_s": dur2, "n_rows": n2, "path": str(out)})
+                                parsed = True
+                except Exception as e:
+                    print(f"          [warn] wfdb local parse failed for '{sid}': {e}")
 
-        if VERBOSE:
-            print(f"[fantasia] [{i}/{n}] done '{rec}'.", flush=True)
+        # 3) 联网（可选）
+        if (not parsed) and allow_net:
+            try:
+                rec = wfdb.rdrecord(sid, pn_dir="fantasia")
+                fs = float(rec.fs)
+                name_map = {nm.upper(): idx for idx, nm in enumerate(rec.sig_name)}
+                for want in signals:
+                    if want == "ecg":
+                        ch = None
+                        for k in name_map:
+                            if "ECG" in k:
+                                ch = name_map[k]; break
+                        if ch is not None:
+                            arr = rec.p_signal[:, ch]
+                            out = _save_continuous(sid, "ecg", arr, fs, root, cache_fmt)
+                            fs2, dur2, n2 = _summary_of_cached(out)
+                            print(f"          parsed(network) → {out}  (fs={fs2:.0f} Hz, dur≈{dur2:.0f}s, n={n2})")
+                            rows.append({"subject_id": sid, "signal": "ecg", "source": "network",
+                                         "fs_hz": fs2, "dur_s": dur2, "n_rows": n2, "path": str(out)})
+                            parsed = True
+                    elif want == "resp":
+                        ch = None
+                        for k in name_map:
+                            if "RESP" in k:
+                                ch = name_map[k]; break
+                        if ch is not None:
+                            arr = rec.p_signal[:, ch]
+                            out = _save_continuous(sid, "resp", arr, fs, root, cache_fmt)
+                            fs2, dur2, n2 = _summary_of_cached(out)
+                            print(f"          parsed(network) → {out}  (fs={fs2:.0f} Hz, dur≈{dur2:.0f}s, n={n2})")
+                            rows.append({"subject_id": sid, "signal": "resp", "source": "network",
+                                         "fs_hz": fs2, "dur_s": dur2, "n_rows": n2, "path": str(out)})
+                            parsed = True
+            except Exception as e:
+                print(f"          [warn] wfdb network parse failed for '{sid}': {e}")
 
-    return pd.concat(dfs, ignore_index=True)
+        # 只在第一个被试打印一次“列命名说明”
+        if not first_subject_schema_printed and (cached_any or parsed):
+            print("          [schema] columns for continuous signals: ['time_s','value','fs_hz']")
+            first_subject_schema_printed = True
 
-def _infer_age_group(rec: str, mapping: dict) -> str:
-    token = rec[2] if len(rec) >= 3 else ""
-    return mapping.get(token, "unknown")
+    # 收尾：打印轻量 summary（每个被试×信号一行）
+    df_sum = pd.DataFrame(rows)
+    if not df_sum.empty:
+        # 汇总每个 subject 的可用信号
+        for sid, sub in df_sum.groupby("subject_id"):
+            parts = [f"{r['signal']}: fs={r['fs_hz']:.0f}Hz, dur≈{r['dur_s']:.0f}s, n={int(r['n_rows'])}"
+                     for _, r in sub.iterrows()]
+            print(f"[ok] {sid} | " + " | ".join(parts))
+    return df_sum

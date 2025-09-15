@@ -38,10 +38,17 @@ def _hr_acc_vendor_suffix(name: str) -> str:
     if "verity" in low: return "v"   # Verity
     return ""                        # 未知就不加
 
-def load(dataset_cfg: dict) -> pd.DataFrame:
+# --- helpers ---
+def _resolve_root(data_dir: Path, root_str: str) -> Path:
+    p = Path(root_str)
+    return p if p.is_absolute() else (data_dir / p)
+
+def load(dataset_cfg: dict, data_dir: Path) -> pd.DataFrame:
     """把用户选定目录的文件归位到 settings['root']/settings['events']。不读内容。"""
-    root: Path   = Path(dataset_cfg["root"])
-    events: Path = Path(dataset_cfg["events"]) if dataset_cfg.get("events") else None
+    root   = _resolve_root(data_dir, dataset_cfg.get("root",   "data/raw/local"))
+    events = _resolve_root(data_dir, dataset_cfg.get("events", "data/raw/local/events")) \
+             if dataset_cfg.get("events") else None
+             
     opts         = dataset_cfg.get("options", {})
     ask_dir      = bool(opts.get("ask_dir", True))
     copy_mode    = str(opts.get("copy_mode", "copy2")).lower()
