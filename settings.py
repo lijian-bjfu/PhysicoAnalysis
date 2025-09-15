@@ -46,37 +46,21 @@ DATASETS = {
     },
     "fantasia": {
         "loader": "scripts.loaders.fantasia_loader",
-        "root":   "raw/physionet/fantasia",
+        "root":   "raw/antasia",
         "events": None,
         "options": {
-            # 两种落地模式：
-            #   as_is   → 原 WFDB（三件套 .hea/.dat/.atr）
-            #   extract → 提取为 <sid>_{ecg|resp}.parquet（方便后续）
-            "mode": "extract",
-            "records": None   # None=全库；或 ["f1o01","f1y01"] 之类
+            "records": [],                               # 空=自动枚举；也可列 ["f1o05","f1o06",...]
+            "signals": ["ecg","resp"],                   # 要落盘的信号
+            "prefer_local_wfdb": True,                   # 有 .hea/.dat/.ecg 就本地解析
+            "allow_network": False,                      # 禁止联网（你已有 subset）
+            "cache_format": "parquet"                    # 产 <sid>_ecg.parquet / <sid>_resp.parquet
         }
     }
     # "wesad": {...} 以后你加
 }
 
 # 指定数据集
-ACTIVE_DATA = "local"
-
-# # 选择要跑的数据集（支持多个），每个dataset声明来源与参数
-# DATASETS = [
-#     {
-#         "name": "fantasia_demo",
-#         "source": "fantasia",         # 调用 scripts/loaders/fantasia_loader.py
-#         "records": [], # 如果选择性下载，用 ["f1y01", "f1o01"] 的方式
-#         "age_group_map": {"y": "young", "o": "old"},
-#     },
-#     # 也可加自定义CSV来源（示例）
-#     # {
-#     #   "name": "custom_demo",
-#     #   "source": "custom_csv",
-#     #   "csv_glob": "data/raw/custom/*.csv",
-#     # }
-# ]
+ACTIVE_DATA = "fantasia"
 
 
 # RR 选择阈值（给 2a_select_rr.py）
