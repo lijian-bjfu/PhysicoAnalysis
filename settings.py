@@ -2,30 +2,92 @@
 
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).parent
-DATA_DIR = PROJECT_ROOT / "data"
-PROCESSED_DIR = DATA_DIR / "processed"
-FEATURES_DIR = DATA_DIR / "features"
-REPORTS_DIR = PROJECT_ROOT / "reports" / "figures"
-VERBOSE = True
-CACHE_RAW = True
-RAW_CACHE_DIR = DATA_DIR / "raw" / "physionet" / "fantasia"
+# PROJECT_ROOT = Path(__file__).parent
+# DATA_DIR = PROJECT_ROOT / "data"
+# PROCESSED_DIR = DATA_DIR / "processed"
+# FEATURES_DIR = DATA_DIR / "features"
+# REPORTS_DIR = PROJECT_ROOT / "reports" / "figures"
+# VERBOSE = True
+# CACHE_RAW = True
+# RAW_CACHE_DIR = DATA_DIR / "raw" / "physionet" / "fantasia"
 
-# 选择要跑的数据集（支持多个），每个dataset声明来源与参数
-DATASETS = [
-    {
-        "name": "fantasia_demo",
-        "source": "fantasia",         # 调用 scripts/loaders/fantasia_loader.py
-        "records": [], # 如果选择性下载，用 ["f1y01", "f1o01"] 的方式
-        "age_group_map": {"y": "young", "o": "old"},
+# 数据源开关
+DATA_SOURCE = "fantasia"   # "local" or "fantasia"
+
+# 数据根
+PROJECT_ROOT  = Path(__file__).parent
+DATA_DIR      = PROJECT_ROOT / "data"
+PROCESSED_DIR = DATA_DIR / "processed"
+RAW_CACHE_DIR = DATA_DIR / "raw" / ("physionet/fantasia" if DATA_SOURCE=="fantasia" else "local")
+
+# 导入器关键词（给 1_data_norm.py 用）
+# 信号别名（用于 detect_signal）
+SIGNAL_ALIASES = {
+    "ecg":   ["ecg"],
+    "rr":    ["rr","ibi","ppi"],
+    "hr":    ["hr","bpm","heart_rate"],
+    "resp":  ["resp","respiration","breath","breathing"],
+    "ppg":   ["ppg","bvp"],
+    "acc":   ["acc","accelerometer","accel"],
+    # "events":["events","event","marker","mark","trigger","onset"]
+}
+DEVICE_TAGS = {"h10":"h", "verity":"v"}
+
+DATASETS = {
+    "local": {
+        "loader": "scripts.loaders.custom_loader",   # 只负责“归位”
+        "root":   "raw/local",                        # 统一落地目录,该目录接 DATA_DIR
+        "events": "data/raw/local/events",                 # 事件落地目录
+        "options": {
+            "sid_pattern": "P{p:03d}S{s:03d}T{t:03d}R{r:03d}",  # 文件名生成用
+            "ask_dir": True,                                   # 打开系统对话框选目录
+            "copy_mode": "copy2"                               # copy/copy2/move
+        }
     },
-    # 也可加自定义CSV来源（示例）
-    # {
-    #   "name": "custom_demo",
-    #   "source": "custom_csv",
-    #   "csv_glob": "data/raw/custom/*.csv",
-    # }
-]
+    "fantasia": {
+        "loader": "scripts.loaders.fantasia_loader",
+        "root":   "raw/physionet/fantasia",
+        "events": None,
+        "options": {
+            # 两种落地模式：
+            #   as_is   → 原 WFDB（三件套 .hea/.dat/.atr）
+            #   extract → 提取为 <sid>_{ecg|resp}.parquet（方便后续）
+            "mode": "extract",
+            "records": None   # None=全库；或 ["f1o01","f1y01"] 之类
+        }
+    }
+    # "wesad": {...} 以后你加
+}
+
+# 指定数据集
+ACTIVE_DATA = "local"
+
+# # 选择要跑的数据集（支持多个），每个dataset声明来源与参数
+# DATASETS = [
+#     {
+#         "name": "fantasia_demo",
+#         "source": "fantasia",         # 调用 scripts/loaders/fantasia_loader.py
+#         "records": [], # 如果选择性下载，用 ["f1y01", "f1o01"] 的方式
+#         "age_group_map": {"y": "young", "o": "old"},
+#     },
+#     # 也可加自定义CSV来源（示例）
+#     # {
+#     #   "name": "custom_demo",
+#     #   "source": "custom_csv",
+#     #   "csv_glob": "data/raw/custom/*.csv",
+#     # }
+# ]
+
+
+# RR 选择阈值（给 2a_select_rr.py）
+RR_COMPARE = {
+    "hr_smooth_sec": 1.0,     # 1 Hz 心率轨
+    "mae_bpm_max": 2.0,
+    "bias_bpm_max": 1.0,
+    "min_valid_ratio": 0.95,
+    "max_flag_ratio": 0.05,
+    "max_drift_ms_per5min": 200.0
+}
 
 # 清洗与分窗参数（全局）
 PARAMS = {
@@ -41,6 +103,20 @@ PARAMS = {
     "log_power": True,
     "valid_rr_ratio_min": 0.80,
     "require_5min_for_freq": True,
+}
+
+# 原始数据快查表 2qc_rr_<sid>*.csv
+QC_RR_LABELS = {
+    "t_s": "RR 对应的时间戳（秒，ECG 时间轴）",
+    "rr_ms": "心搏间期（毫秒）",
+    "hr_bpm": "由 rr_ms 换算的心率（次/分）",
+    "valid": "该 RR 是否被判为有效（布尔）；等于 not flagged",
+    "flagged": "点级规则命中（布尔）；相邻 RR 相对变化超阈值或心率越界即为 True",
+    "flag_delta": "相邻 RR 相对变化是否超过阈值 rr_artifact_threshold（布尔）",
+    "flag_hr": "心率是否越过 hr_min_max_bpm 范围（布尔）",
+    "flag_reason": "命中规则的摘要：'delta'、'hr' 或 'delta|hr'；未命中为空字符串",
+    "quality_check": "快速质检用的宽口径可疑标记（布尔）；推荐定义为 flagged 或位于建议排查区间内",
+    "n_rr_corrections": "从序列开始累计到当前点，被判为可疑/需修正的 RR 个数（仅计数，未实际改动）"
 }
 
 # 清洗后单被试 RR 表（2clean_<sid>.csv / .parquet）
@@ -81,6 +157,26 @@ RR_REVIEW_LABELS = {
     "hr_bpm_raw_minmax": "心率越界判定使用的上下界（来自PARAMS['hr_min_max_bpm']）",
     "keep": "人工复核保留标记（留空=不改变；1=强制设为有效）",
     "rr_ms_override": "人工给出的RR替代值（毫秒，正数才生效），用于手动修正异常RR"
+}
+
+# 建议伪迹清楚表
+QC_SUGGEST_LABELS = {
+    "subject_id": "被试编号，与 2clean_<sid>.csv 对应",
+    "t_start_s": "建议剪除片段起点（秒，ECG 时间轴）",
+    "t_end_s": "建议剪除片段终点（秒，ECG 时间轴）",
+    "reason": "建议原因标签的并集（low_valid/high_flag/hr_jump/too_few_rr 等）"
+}
+
+# 可调质检参数默认值
+QC_PARAMS = {
+    "qc_window_s": 30.0,        # 质检滑窗长度（秒）
+    "qc_stride_s": 10.0,        # 质检滑窗步长（秒）
+    "qc_min_rr_per_win": 20,    # 每窗最少 RR 数
+    "qc_min_valid_ratio": 0.85, # 有效 RR 比例阈值（低于此为差）
+    "qc_max_flagged_ratio": 0.20,# 被标记 RR 比例阈值（高于此为差）
+    "qc_hr_jump_bpm": 25.0,     # 相邻窗 HR 均值跳变阈值（bpm）
+    "qc_merge_gap_s": 5.0,      # 建议片段间隙合并阈值（秒）
+    "qc_min_cut_s": 3.0,        # 最短建议片段长度（秒）
 }
 
 # 输出列说明

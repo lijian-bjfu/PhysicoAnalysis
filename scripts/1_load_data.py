@@ -1,61 +1,48 @@
 # scripts/1_load_data.py
-import importlib
-import pandas as pd
-
-# --- project-root bootstrap ---
-import sys
+import importlib, sys, pandas as pd
 from pathlib import Path
-_p = Path(__file__).resolve()
-for _ in range(6):  # 最多向上爬6层
-    if (_p.parent / "settings.py").exists():
-        sys.path.insert(0, str(_p.parent))
-        break
-    _p = _p.parent
-# --- end bootstrap ---
-from settings import DATASETS, DATA_DIR, PROCESSED_DIR, VERBOSE
 
-# 加载一阈值（1000万行）
-MAX_COMBINED_ROWS = 10_000_000
+# bootstrap
+_p = Path(__file__).resolve()
+for _ in range(6):
+    if (_p.parent / "settings.py").exists():
+        sys.path.insert(0, str(_p.parent)); break
+    _p = _p.parent
+
+from settings import DATASETS, ACTIVE_DATA, PROJECT_ROOT, PROCESSED_DIR
+
+def _to_abs(path_str: str) -> Path:
+    p = Path(path_str)
+    return p if p.is_absolute() else (PROJECT_ROOT / p)
 
 def main():
-    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-    for ds in DATASETS:
-        mod_name = f"scripts.loaders.{ds['source']}_loader"
-        if VERBOSE:
-            print(f"[loader] use → {mod_name}  dataset='{ds['name']}'")
-        module = importlib.import_module(mod_name)
+    # 取这一次要用的数据集配置
+    dataset_cfg = DATASETS[ACTIVE_DATA].copy()
+    dataset_cfg["root"]   = _to_abs(dataset_cfg["root"])
+    if dataset_cfg.get("events"):
+        dataset_cfg["events"] = _to_abs(dataset_cfg["events"])
+    else:
+        dataset_cfg["events"] = None
 
-        df = module.load(ds, DATA_DIR)
+    loader_mod = dataset_cfg["loader"]
+    mod = importlib.import_module(loader_mod)
 
-        summary = df.groupby(["subject_id","signal"]).agg(
-            dur_s=("time_s","max"),
-            fs_hz=("fs_hz","max"),
-            n_samples=("time_s","size"),
-        ).reset_index()
+    print(f"[load] dataset='{ACTIVE_DATA}'  loader='{loader_mod}'")
+    print(f"[load] root → {dataset_cfg['root']}")
+    if dataset_cfg["events"]:
+        print(f"[load] events → {dataset_cfg['events']}")
 
-        # 浏览 summary
-        out_summary = PROCESSED_DIR / f"1dis_{ds['name']}_summary.csv"
-        summary.to_csv(out_summary, index=False)
-        if VERBOSE:
-            print(f"[save] summary → {out_summary}")
-        
-        # 再按阈值决定要不要写大表（由于全库数据过大，默认只读 MAX_COMBINED_ROWS 之内数量的数据）
-        if len(df) <= MAX_COMBINED_ROWS:
-            out_parquet = PROCESSED_DIR / f"1dis_{ds['name']}_raw.parquet"
-            df.to_parquet(out_parquet, index=False)
-            if VERBOSE:
-                print(f"[save] long table → {out_parquet} (rows={len(df)})")
-        else:
-            if VERBOSE:
-                print(f"[skip] long table skipped (rows={len(df)} > {MAX_COMBINED_ROWS}). "
-                    "Use per-record parquet in data/raw/physionet/fantasia/")
+    # 让 loader 自己去归位并返回摘要
+    summary: pd.DataFrame = mod.load(dataset_cfg)
 
-        # 打印数据特征
-        for sid, sub in summary.groupby("subject_id"):
-            lines = []
-            for _, r in sub.iterrows():
-                lines.append(f"{r['signal']}: fs={r['fs_hz']:.0f}Hz, dur≈{r['dur_s']:.0f}s, n={int(r['n_samples'])}")
-            print(f"[ok] {sid} | " + " | ".join(lines))
+    out = PROCESSED_DIR / f"1_summary_{ACTIVE_DATA}.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    summary.to_csv(out, index=False)
+    print(f"[save] 摘要 → {out} (rows={len(summary)})")
 
-if __name__ == "__main__":
+    # 给点肉眼可见的东西
+    with pd.option_context("display.max_rows", 20, "display.max_columns", 10):
+        print(summary.head(20))
+
+if __name__=="__main__":
     main()
