@@ -36,10 +36,6 @@ RAW_EXTS = {".csv", ".parquet"}
 # 打印详细信息的开关
 VERBOSE = True
 
-def _resolve_root(root_str: str) -> Path:
-    p = Path(root_str)
-    return p if p.is_absolute() else (DATA_DIR / Path(root_str))
-
 def _read_any(path: Path) -> pd.DataFrame:
     if path.suffix.lower() == ".parquet":
         return pd.read_parquet(path)
@@ -99,18 +95,22 @@ def _save_standard(std: pd.DataFrame,
 
     return out_path, final_sig
 
+def _resolve_root(root_str: str) -> Path:
+    p = Path(root_str)
+    return p if p.is_absolute() else (DATA_DIR / Path(root_str))
+
 def main():
     ds = DATASETS[ACTIVE_DATA]
-    root = _resolve_root(ds["root"])
+    root = _resolve_root(ds["paths"]["raw"])
     options = ds.get("options", {}) or {}
 
-    out_dir = PROCESSED_DIR / "norm" / ACTIVE_DATA
+    out_dir = _resolve_root(ds["paths"]["norm"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if VERBOSE:
         print(f"[norm] dataset='{ACTIVE_DATA}'  loader='{ds.get('loader')}'")
-        print(f"[norm] root → {root}")
-        print(f"[norm] out  → {out_dir}")
+        print(f"[norm] load path → {root}")
+        print(f"[norm] output path  → {out_dir}")
 
     files = [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in RAW_EXTS]
     if not files:

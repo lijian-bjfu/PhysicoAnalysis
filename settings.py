@@ -1,16 +1,6 @@
 # 需要安装依赖：pip install wfdb pandas numpy scipy neurokit2 matplotlib
 
 from pathlib import Path
-
-# PROJECT_ROOT = Path(__file__).parent
-# DATA_DIR = PROJECT_ROOT / "data"
-# PROCESSED_DIR = DATA_DIR / "processed"
-# FEATURES_DIR = DATA_DIR / "features"
-# REPORTS_DIR = PROJECT_ROOT / "reports" / "figures"
-# VERBOSE = True
-# CACHE_RAW = True
-# RAW_CACHE_DIR = DATA_DIR / "raw" / "physionet" / "fantasia"
-
 # 数据源开关
 DATA_SOURCE = "fantasia"   # "local" or "fantasia"
 
@@ -18,20 +8,27 @@ DATA_SOURCE = "fantasia"   # "local" or "fantasia"
 PROJECT_ROOT  = Path(__file__).parent
 DATA_DIR      = PROJECT_ROOT / "data"
 PROCESSED_DIR = DATA_DIR / "processed"
-RAW_CACHE_DIR = DATA_DIR / "raw" / ("physionet/fantasia" if DATA_SOURCE=="fantasia" else "local")
+RAW_CACHE_DIR = DATA_DIR / "raw" / ("fantasia" if DATA_SOURCE=="fantasia" else "local")
 
 # 指定数据集
-ACTIVE_DATA = "fantasia"
+ACTIVE_DATA = "local"
 
 DATASETS = {
     "local": {
         "loader": "scripts.loaders.custom_loader",   # 只负责“归位”
-        "root":   "raw/local",                        # 统一落地目录,该目录接 DATA_DIR
+        # "root":   "raw/local",                        # 统一落地目录,该目录接 DATA_DIR
         "events": "data/raw/local/events",                 # 事件落地目录
         "options": {
             "sid_pattern": "P{p:03d}S{s:03d}T{t:03d}R{r:03d}",  # 文件名生成用
             "ask_dir": True,                                   # 打开系统对话框选目录
             "copy_mode": "copy2"                               # copy/copy2/move
+        },
+        "paths": {
+            "raw":       "raw/local",                  # 归位后的原始（或导入）文件
+            "norm":      "processed/norm/local",       # 2_data_norm 的输出
+            "confirmed": "processed/confirmed/local",  # 3_select_rr 最终 RR
+            "features":  "processed/features/local",   # 6x 特征输出
+            "events":    "raw/local/events"            # 原始事件标记（若有）
         }
     },
     "fantasia": {
@@ -44,10 +41,27 @@ DATASETS = {
             "prefer_local_wfdb": True,       # 有 .hea/.dat/.ecg 就本地解析
             "allow_network": False,          # 禁止联网（你已有 subset）
             "cache_format": "parquet"        # 产 <sid>_ecg.parquet / <sid>_resp.parquet
+        },
+        "paths": {
+            "raw":       "raw/fantasia/",
+            "norm":      "processed/norm/fantasia",
+            "confirmed": "processed/confirmed/fantasia",
+            "features":  "processed/features/fantasia",
         }
     }
     # "wesad": {...} 以后你加
 }
+
+def P(kind: str, ds: str | None = None) -> Path:
+    """解析 dataset 的某类路径（raw/norm/events/rr_final/features）。"""
+    ds = ds or ACTIVE_DATA
+    rel = DATASETS[ds]["paths"][kind]
+    return (DATA_DIR / rel).resolve()
+
+# 兼容旧代码的别名（尽量让老脚本不炸）
+RAW_CACHE_DIR = P("raw")
+EVENTS_DIR    = P("events") if "events" in DATASETS[ACTIVE_DATA]["paths"] else (DATA_DIR / "raw/events")
+
 
 # 导入器关键词（给 1_data_norm.py 用）
 # 信号别名（用于 detect_signal）
@@ -71,6 +85,17 @@ RR_COMPARE = {
     "min_valid_ratio": 0.95,
     "max_flag_ratio": 0.05,
     "max_drift_ms_per5min": 200.0
+}
+
+# RR 综合评分权重（给 3_select_rr.py）
+# 说明：
+# - 评分目标是“越大越好”： score = w_flag*(1-flag_ratio) + w_mae*(1 - min(MAE/mae_bpm_max,1)) + w_bias*(1 - min(|bias|/bias_bpm_max,1))
+# - 权重可不必严格相加为 1，但建议 w_flag + w_mae + w_bias ≈ 1
+# - 如需更看重一致性（MAE/Bias），可调大 w_mae / w_bias；更看重干净程度，则调大 w_flag
+RR_SCORE = {
+    "w_flag": 0.50,   # 伪迹率越低越好（权重）
+    "w_mae":  0.30,   # 与另一来源的一致性（1Hz HR 的 MAE）
+    "w_bias": 0.20,   # 系统性偏差（绝对 Bias）
 }
 
 # 清洗与分窗参数（全局）

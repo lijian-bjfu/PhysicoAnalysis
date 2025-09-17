@@ -45,9 +45,9 @@ def _resolve_root(data_dir: Path, root_str: str) -> Path:
 
 def load(dataset_cfg: dict, data_dir: Path) -> pd.DataFrame:
     """把用户选定目录的文件归位到 settings['root']/settings['events']。不读内容。"""
-    root   = _resolve_root(data_dir, dataset_cfg.get("root",   "data/raw/local"))
-    events = _resolve_root(data_dir, dataset_cfg.get("events", "data/raw/local/events")) \
-             if dataset_cfg.get("events") else None
+    paths = dataset_cfg.get("paths", {})
+    root   = (data_dir / paths.get("raw", "raw/local")).resolve()
+    events = (data_dir / paths.get("events", "raw/local/events")).resolve() if "events" in paths else None
              
     opts         = dataset_cfg.get("options", {})
     ask_dir      = bool(opts.get("ask_dir", True))

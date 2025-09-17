@@ -44,7 +44,7 @@ def load(dataset_cfg: dict, data_dir: Path) -> pd.DataFrame:
       <sid>_resp.parquet (time_s,value,fs_hz)
     并返回一个轻量 summary DataFrame（不会拼巨大长表）。
     """
-    root    = _resolve_root(data_dir, dataset_cfg["root"])
+    root    = _resolve_root(data_dir, dataset_cfg["paths"]["raw"])
     opts    = dataset_cfg.get("options", {}) or {}
     signals = opts.get("signals", ["ecg","resp"])
     allow_net = bool(opts.get("allow_network", False))

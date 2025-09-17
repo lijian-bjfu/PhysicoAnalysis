@@ -15,25 +15,23 @@ for _ in range(6):
 
 from settings import DATA_DIR, PROCESSED_DIR, DATASETS, ACTIVE_DATA
 
-def _resolve_under_data_dir(p: str|Path) -> Path:
-    """仅用于打印展示：把相对路径显示成挂在 DATA_DIR 下的绝对路径。"""
-    pp = Path(p)
-    return pp if pp.is_absolute() else (DATA_DIR / pp)
-
 def main():
     # 取这一次要用的数据集配置（不做就地修改，交给 loader 自己解析）
     dataset_cfg = DATASETS[ACTIVE_DATA]
+    all_paths = dataset_cfg.get("paths", {})
 
     loader_mod = dataset_cfg["loader"]
-    mod = importlib.import_module(loader_mod)
-
+    
     print(f"[load] dataset='{ACTIVE_DATA}'  loader='{loader_mod}'")
-    if "root" in dataset_cfg:
-        print(f"[load] root   → {_resolve_under_data_dir(dataset_cfg['root'])}")
-    if dataset_cfg.get("events"):
-        print(f"[load] events → {_resolve_under_data_dir(dataset_cfg['events'])}")
+    if "raw" in all_paths:
+        print(f"[load] raw   →{(DATA_DIR / all_paths['raw']).resolve()}")
+    if "events" in all_paths:
+        print(f"[load] events  → {(DATA_DIR / all_paths['events']).resolve()}")
+    else:
+        print(f"[load] events →{ACTIVE_DATA} 数据集没有实验事件标记数据")
 
     # 统一签名：把 DATA_DIR 传给 loader，由它来解析相对/绝对路径
+    mod = importlib.import_module(loader_mod)
     summary: pd.DataFrame = mod.load(dataset_cfg, DATA_DIR)
 
     # 保存摘要
