@@ -24,11 +24,11 @@ def main():
     
     print(f"[load] dataset='{ACTIVE_DATA}'  loader='{loader_mod}'")
     if "raw" in all_paths:
-        print(f"[load] raw   →{(DATA_DIR / all_paths['raw']).resolve()}")
+        print(f"[load] raw data path   →{(DATA_DIR / all_paths['raw']).resolve()}")
     if "events" in all_paths:
-        print(f"[load] events  → {(DATA_DIR / all_paths['events']).resolve()}")
+        print(f"[load] events data path  → {(DATA_DIR / all_paths['events']).resolve()}")
     else:
-        print(f"[load] events →{ACTIVE_DATA} 数据集没有实验事件标记数据")
+        print(f"[load] events data path →{ACTIVE_DATA} 数据集没有实验事件标记数据")
 
     # 统一签名：把 DATA_DIR 传给 loader，由它来解析相对/绝对路径
     mod = importlib.import_module(loader_mod)
