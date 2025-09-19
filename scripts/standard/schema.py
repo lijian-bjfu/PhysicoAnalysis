@@ -75,3 +75,54 @@ def to_hr(df: pd.DataFrame) -> pd.DataFrame:
 
     # 重置行索引
     return out.reset_index(drop=True)
+
+def to_events(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    规范化事件标注（HR）到统一 schema：
+      输入（来自 relabel.map_to_standard 后）需包含列：
+        - time_s : float，统一的时间轴（秒，可来自 LSL 或换算）
+        - events : str, 如"baseline_start","stim_start",stim_end"等等
+      输出：
+        - DataFrame[["time_s","events"]]，按 time_s 排序
+    """
+    need = {"time_s", "events"}
+    if not need.issubset(df.columns):
+        missing = need - set(df.columns)
+        raise ValueError(f"to_events(): HR 缺列：需要 {need}，缺少 {missing}")
+
+    out = df[["time_s", "events"]].copy()
+
+    # 事件名统一为字符串并去首尾空白
+    out["events"] = out["events"].astype(str).str.strip()
+    # 丢弃缺失与空字符串
+    out = out.dropna(subset=["time_s"]) \
+             .loc[out["events"].ne("")]
+
+    # 重置行索引
+    return out.reset_index(drop=True)
+
+def to_acc(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    规范化事件标注（HR）到统一 schema：
+      输入（来自 relabel.map_to_standard 后）需包含列：
+        - time_s  : float，统一时间轴（秒）
+        - value_x : float，加速度 X 轴（单位保持与原始一致，如 mG）
+        - value_y : float，加速度 Y 轴
+        - value_z : float，加速度 Z 轴
+      输出：
+        - DataFrame[["time_s","value_x","value_y","value_z"]]
+    """
+    need = {"time_s","value_x","value_y","value_z"}
+     
+    if not need.issubset(df.columns):
+        missing = need - set(df.columns)
+        raise ValueError(f"to_events(): HR 缺列：需要 {need}，缺少 {missing}")
+
+    out = df[["time_s", "value_x", "value_y", "value_z"]].copy()
+        # 数值化
+    out["time_s"]  = pd.to_numeric(out["time_s"], errors="coerce")
+    out["value_x"] = pd.to_numeric(out["value_x"], errors="coerce")
+    out["value_y"] = pd.to_numeric(out["value_y"], errors="coerce")
+    out["value_z"] = pd.to_numeric(out["value_z"], errors="coerce")
+
+    return out.reset_index(drop=True)

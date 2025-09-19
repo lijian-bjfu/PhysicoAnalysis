@@ -15,18 +15,18 @@ ACTIVE_DATA = "local"
 
 DATASETS = {
     "local": {
-        "loader": "scripts.loaders.custom_loader",   # 只负责“归位”
-        # "root":   "raw/local",                        # 统一落地目录,该目录接 DATA_DIR
-        "events": "data/raw/local/events",                 # 事件落地目录
+        "loader": "scripts.loaders.local_loader",   # 只负责“归位”
         "options": {
             "sid_pattern": "P{p:03d}S{s:03d}T{t:03d}R{r:03d}",  # 文件名生成用
             "ask_dir": True,                                   # 打开系统对话框选目录
-            "copy_mode": "copy2"                               # copy/copy2/move
+            "copy_mode": "copy2"                               # 把原始文件载入 raw 文件夹的方法：copy/copy2/move
         },
         "paths": {
             "raw":       "raw/local",                  # 归位后的原始（或导入）文件
             "norm":      "processed/norm/local",       # 2_data_norm 的输出
             "confirmed": "processed/confirmed/local",  # 3_select_rr 最终 RR
+            "clean":        "processed/clean/loacal",   # 检验并清理数据
+            "windowing": "processed/windowing/local",  # 切窗
             "features":  "processed/features/local",   # 6x 特征输出
             "events":    "raw/local/events"            # 原始事件标记（若有）
         }
@@ -46,10 +46,12 @@ DATASETS = {
             "raw":       "raw/fantasia/",
             "norm":      "processed/norm/fantasia",
             "confirmed": "processed/confirmed/fantasia",
+            "clean":        "processed/clean/fantasia",   # 检验并清理数据
+            "windowing": "processed/windowing/fantasia",  # 切窗
             "features":  "processed/features/fantasia",
         }
     }
-    # "wesad": {...} 以后你加
+    # "wesad": {...} 任何开源数据
 }
 
 def P(kind: str, ds: str | None = None) -> Path:
@@ -72,10 +74,54 @@ SIGNAL_ALIASES = {
     "resp":  ["resp","respiration","breath","breathing"],
     "ppg":   ["ppg","bvp"],
     "acc":   ["acc","accelerometer","accel"],
-    # "events":["events","event","marker","mark","trigger","onset"]
+    "events":["markers", "events"]
 }
 DEVICE_TAGS = {"h10":"h", "verity":"v"}
 
+# --- 用户过滤配置（支持短号） ---------------------------------
+# 例子：
+# SUBJECTS_FILTER = []                  # 空：处理全部
+# SUBJECTS_FILTER = ["P001S001T001R001"]# 指定完整 sid
+# SUBJECTS_FILTER = ["001","002"]       # 短号：匹配 P001…、P002…
+SUBJECTS_FILTER = ["001"]  # 用完记得清空或改
+
+# 限制最多预览多少个（None 表示不限）
+PREVIEW_LIMIT = None
+
+# 根据用户输入的 001,002等识别各类被测的标注id,用于过滤数据
+def sid_filter(all_sids: list[str]) -> list[str]:
+    if not SUBJECTS_FILTER:
+        return sorted(all_sids)
+    keep = []
+    low = [t.strip().lower() for t in SUBJECTS_FILTER if t and t.strip()]
+    for sid in sorted(all_sids):
+        sid_low = sid.lower()
+        for t in low:
+            # 短号：纯数字 → 匹配 "P{###}"
+            if t.isdigit():
+                tt = f"p{int(t):03d}"
+                if tt in sid_low:
+                    keep.append(sid); break
+            # 直接包含：支持你写 f1y01 / P001… 等
+            elif t in sid_low:
+                keep.append(sid); break
+    # 去重保持顺序
+    seen = set(); out = []
+    for s in keep:
+        if s not in seen:
+            seen.add(s); out.append(s)
+
+    if PREVIEW_LIMIT is not None:
+        out = out[:int(PREVIEW_LIMIT)]
+    
+    if not out:
+        print(f"[info] 发现 {len(all_sids)} 个被试，但过滤后为 0。检查 SUBJECTS_FILTER={SUBJECTS_FILTER}")
+        
+    print(f"[select] 总计发现 {len(all_sids)} 个；将处理 {len(out)} 个 → {out}")
+
+    return out
+
+# ---------------------------------------------------------------
 
 # RR 选择阈值（给 2a_select_rr.py）
 RR_COMPARE = {

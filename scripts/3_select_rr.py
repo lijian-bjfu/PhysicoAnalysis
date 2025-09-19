@@ -14,7 +14,7 @@ for _ in range(6):
     if (_p.parent / "settings.py").exists():
         sys.path.insert(0, str(_p.parent)); break
     _p = _p.parent
-from settings import DATASETS, ACTIVE_DATA, DATA_DIR, PROCESSED_DIR, RR_COMPARE, PARAMS, RR_SCORE  # RR_SCORE 可选，若未在 settings 中定义将使用默认权重
+from settings import DATASETS, ACTIVE_DATA, DATA_DIR, PROCESSED_DIR, RR_COMPARE, PARAMS, RR_SCORE, sid_filter  # RR_SCORE 可选，若未在 settings 中定义将使用默认权重
 
 paths = DATASETS[ACTIVE_DATA]["paths"]
 SRC_NORM_DIR = (DATA_DIR / paths["norm"]).resolve()
@@ -22,19 +22,13 @@ RR_OUT_DIR   = (DATA_DIR / paths["confirmed"]).resolve()
 PREVIEW_DIR  = (PROCESSED_DIR / "rr_select" / ACTIVE_DATA).resolve()
 PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 
+# 画图横轴范围策略，基于事件标注起始点绘制，基于hr波长起始点
+# 'auto' | 'events' | 'hr'
+PLOT_RANGE_MODE = 'auto'
+
+
 DEC_SUGG = PREVIEW_DIR / "decision_suggested.csv"
 DEC_FILE = PREVIEW_DIR / "decision.csv"
-
-# --- 用户过滤配置（支持短号） ---------------------------------
-# 例子：
-# SUBJECTS_FILTER = []                  # 空：处理全部
-# SUBJECTS_FILTER = ["P001S001T001R001"]# 指定完整 sid
-# SUBJECTS_FILTER = ["001","002"]       # 短号：匹配 P001…、P002…
-SUBJECTS_FILTER = []  # 你要的示例；用完记得清空或改
-
-# 限制最多预览多少个（None 表示不限）
-PREVIEW_LIMIT = None
-# ---------------------------------------------------------------
 
 # 读取 ecg 数据
 def _read_ecg(sid: str):
@@ -133,29 +127,192 @@ def _flag_rr(rr: pd.DataFrame):
     rr["flagged"] = (flag_delta|flag_hr)
     return rr
 
-# 根据用户输入的 001,002等识别各类被测的标注id,用于过滤数据
-def _apply_filter(all_sids: list[str], tokens: list[str]) -> list[str]:
-    if not tokens:
-        return sorted(all_sids)
-    keep = []
-    low = [t.strip().lower() for t in tokens if t and t.strip()]
-    for sid in sorted(all_sids):
-        sid_low = sid.lower()
-        for t in low:
-            # 短号：纯数字 → 匹配 "P{###}"
-            if t.isdigit():
-                tt = f"p{int(t):03d}"
-                if tt in sid_low:
-                    keep.append(sid); break
-            # 直接包含：支持你写 f1y01 / P001… 等
-            elif t in sid_low:
-                keep.append(sid); break
-    # 去重保持顺序
-    seen = set(); out = []
-    for s in keep:
-        if s not in seen:
-            seen.add(s); out.append(s)
-    return out
+# 读取 events（<sid>_events.csv），返回 DataFrame[time_s, events]
+def _read_events(sid: str):
+    p = SRC_NORM_DIR / f"{sid}_events.csv"
+    if not p.exists():
+        return None
+    try:
+        df = pd.read_csv(p)
+    except Exception:
+        return None
+    if not {"time_s", "events"}.issubset(df.columns):
+        return None
+    df = df.dropna(subset=["time_s"]).sort_values("time_s")
+    return df
+
+# 读取 ACC（<sid>_acc.parquet/csv），并计算 1Hz 活动强度（0-1 归一化）
+# 活动强度 = 每秒 |acc| 的均值，经最小-最大归一化。若只有 acc_mag 列则直接使用。
+# 返回 (bins_sec, activity_0_1)
+def _read_acc_activity_1hz(sid: str, t0=None, t1=None, step=1.0):
+    """
+    将三轴加速度（norm 目录下 <sid>_acc.parquet/csv）聚合为 1Hz 的活动强度曲线。
+
+    参数
+    -----
+    sid : str
+        被试标识（与文件名前缀一致）。函数会在 `SRC_NORM_DIR` 中查找
+        `<sid>_acc.parquet` 或 `<sid>_acc.csv`。
+    t0 : float | None
+        计算范围的起始时间（秒）。若为 None，则使用该被试加速度数据
+        的最小 `time_s` 作为起点。
+    t1 : float | None
+        计算范围的结束时间（秒）。若为 None，则使用该被试加速度数据
+        的最大 `time_s` 作为终点。
+    step : float
+        聚合步长（秒）。默认 1.0，即按每秒求一次活动强度的均值。
+
+    返回
+    -----
+    (bins, activity) : (np.ndarray, np.ndarray)
+        `bins` 为按 `step` 等间隔划分的时间边界（秒），长度为 N；
+        `activity` 为对应的 0–1 归一化活动强度（N 长度），灰色点线用于
+        图上仅作运动程度参考。若文件缺失或数据不足，返回 (None, None)。
+
+    说明
+    -----
+    - 活动强度的原理：若存在 `value_x/value_y/value_z` 列，则按模长
+      `sqrt(x^2 + y^2 + z^2)` 得到幅值，再对每个 1 秒桶求平均；随后用
+      5–95 分位数做鲁棒的最小-最大归一化，限制在 [0,1]。
+    - 若未找到加速度文件或必要列，函数直接返回 (None, None)。
+    """
+    p = SRC_NORM_DIR / f"{sid}_acc.parquet"
+    if not p.exists():
+        p = SRC_NORM_DIR / f"{sid}_acc.csv"
+        if not p.exists():
+            return None, None
+    try:
+        acc = pd.read_parquet(p) if p.suffix == ".parquet" else pd.read_csv(p)
+    except Exception:
+        return None, None
+    if "time_s" not in acc.columns:
+        return None, None
+
+    # 计算模长或使用现成幅值
+    if {"value_x", "value_y", "value_z"}.issubset(acc.columns):
+        mag = np.sqrt(acc["value_x"]**2 + acc["value_y"]**2 + acc["value_z"]**2)
+    else:
+        return None, None
+
+    ts = pd.to_numeric(acc["time_s"], errors="coerce")
+    ok = ~(mag.isna() | ts.isna())
+    mag = mag[ok].to_numpy()
+    ts = ts[ok].to_numpy()
+    if len(ts) < 3:
+        return None, None
+
+    if t0 is None: t0 = float(np.nanmin(ts))
+    if t1 is None: t1 = float(np.nanmax(ts))
+    if not np.isfinite(t0) or not np.isfinite(t1) or t1 - t0 <= 0:
+        return None, None
+
+    bins = np.arange(t0, t1 + step, step)
+    idx = np.digitize(ts, bins) - 1
+    act = np.full(len(bins), np.nan)
+    for i in range(len(bins)):
+        vals = mag[idx == i]
+        if len(vals):
+            act[i] = np.nanmean(np.abs(vals))
+
+    # 0-1 归一化（鲁棒：用分位数避免尖峰支配）
+    v = act[~np.isnan(act)]
+    if v.size < 3:
+        return bins, act  # 返回未归一化，也行
+    lo, hi = np.nanpercentile(v, [5, 95])
+    if hi > lo:
+        act = (act - lo) / (hi - lo)
+        act = np.clip(act, 0.0, 1.0)
+    return bins, act
+
+# 根据策略 PLOT_RANGE_MODE 决定绘图横轴范围
+# bins: HR 曲线的时间边界（np.ndarray）
+# 返回 (xmin, xmax)
+def _determine_plot_range(sid: str, bins):
+    if bins is None or len(bins) == 0:
+        return None, None
+    xmin_hr, xmax_hr = float(bins[0]), float(bins[-1])
+
+    # 读取事件
+    ev = _read_events(sid)
+    has_ev = ev is not None and len(ev) >= 2 and 'time_s' in ev.columns
+    if has_ev:
+        ev_min = float(ev['time_s'].min())
+        ev_max = float(ev['time_s'].max())
+    else:
+        ev_min = ev_max = None
+
+    mode = PLOT_RANGE_MODE.lower() if isinstance(PLOT_RANGE_MODE, str) else 'auto'
+
+    if mode == 'events' and has_ev:
+        xmin, xmax = ev_min, ev_max
+    elif mode == 'hr':
+        xmin, xmax = xmin_hr, xmax_hr
+    else:  # auto
+        xmin, xmax = (ev_min, ev_max) if has_ev else (xmin_hr, xmax_hr)
+
+    # 给一点边距，避免贴边的标签遮挡
+    if xmin is not None and xmax is not None and xmax > xmin:
+        pad = max(1.0, 0.01 * (xmax - xmin))
+        xmin -= pad
+        xmax += pad
+    return xmin, xmax
+
+# 在已有 HR 图上叠加 events（红色竖线）与 ACC 活动（灰色点线，右轴 0–1）
+# bins_range: (xmin,xmax) 用于限制可视范围，可传 None
+def _overlay_events_and_acc(ax, sid: str, bins_range=None):
+    xmin, xmax = (None, None) if bins_range is None else bins_range
+
+    # 叠加 ACC 活动
+    acc_bins, acc_act = _read_acc_activity_1hz(sid, t0=xmin, t1=xmax)
+    if acc_bins is not None and acc_act is not None:
+        ax2 = ax.twinx()
+        ax2.plot(acc_bins, acc_act, linestyle="-", color="0.8", alpha=0.9, linewidth=0.6, label="activity (acc)")
+        ax2.set_ylabel("activity (0–1)")
+        ax2.set_ylim(0, 1)
+        # 避免图例重复，把第二轴的线加入主图例
+        lines, labels = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(lines + lines2, labels + labels2, loc="upper right")
+
+    # 叠加事件（竖线 + 文本标签），并打印诊断信息
+    ev = _read_events(sid)
+    if ev is not None and len(ev):
+        ev = ev.dropna(subset=["time_s"]).sort_values("time_s").copy()
+        total_events = len(ev)
+        # 限定显示范围
+        if xmin is not None:
+            in_range = (ev["time_s"] >= xmin) & (ev["time_s"] <= (xmax if xmax is not None else ev["time_s"].max()))
+            ev_in = ev[in_range]
+            ev_out = ev[~in_range]
+        else:
+            ev_in = ev; ev_out = ev.iloc[0:0]
+
+        # 画竖线
+        for _, row in ev_in.iterrows():
+            x = float(row["time_s"]) 
+            ax.axvline(x=x, color="red", linestyle="-", linewidth=1.2, alpha=0.9)
+                
+        # 画文本标签（竖排），贴近顶端
+        if len(ev_in):
+            ymin, ymax = ax.get_ylim()
+            ytext = ymax * 0.98
+            for _, row in ev_in.iterrows():
+                x = float(row["time_s"]) * 1.00001
+                label = str(row.get("events", "")).strip()
+                if label:
+                    ax.text(x, ytext, label, color="red", fontsize=8, rotation=90,
+                            va="top", ha="center", alpha=0.9, clip_on=True)
+        
+                # 控制台诊断：总数/可见/被裁掉
+        try:
+            n_in, n_out = len(ev_in), len(ev_out)
+            if n_out > 0:
+                dropped = ", ".join([f"{float(t):.3f}:{str(l)}" for t,l in zip(ev_out["time_s"].tolist(), ev_out.get("events", [""]*n_out))])
+                print(f"[events] {sid}: total={total_events}, shown={n_in}, clipped={n_out} → {dropped}")
+            else:
+                print(f"[events] {sid}: total={total_events}, shown={n_in}, clipped=0")
+        except Exception:
+            pass
 
 # 画单路 RR 的预览图（把逐搏 RR 映射为 1Hz HR 曲线）
 def _plot_preview_single_rr(sid: str, rr: pd.DataFrame, label: str = "HR from ECG→RR"):
@@ -169,8 +326,24 @@ def _plot_preview_single_rr(sid: str, rr: pd.DataFrame, label: str = "HR from EC
     ax.set_title(f"{sid} (preview)")
     ax.set_xlabel("time (s)")
     ax.set_ylabel("bpm")
-    ax.legend()
+    # ax.legend()
     ax.grid(True, alpha=.3)
+
+    # 选择横轴范围（events 优先或 HR，取决于策略）
+    xmin, xmax = _determine_plot_range(sid, bins)
+    if xmin is not None and xmax is not None:
+        ax.set_xlim(xmin, xmax)
+        rng = (xmin, xmax)
+    else:
+        rng = (bins[0], bins[-1])
+
+    # 叠加 events 与 acc（按选定范围）
+    _overlay_events_and_acc(ax, sid, bins_range=rng)
+    # 图例放右上角（_overlay_里已合并第二轴图例）
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(handles, labels, loc="upper right")
+    
     fig.tight_layout()
     fig.savefig(PREVIEW_DIR / f"preview_{sid}.png", dpi=130)
     plt.close(fig)
@@ -197,13 +370,7 @@ def main():
     sids = sorted({p.stem.split("_")[0] for p in SRC_NORM_DIR.glob("*_rr.csv")}|{p.stem.split("_")[0] for p in SRC_NORM_DIR.glob("*_ecg.*")})
     # 仅挑选用户指定的被试
     all_sids = sids
-    sids = _apply_filter(all_sids, SUBJECTS_FILTER)
-    if PREVIEW_LIMIT is not None:
-        sids = sids[:int(PREVIEW_LIMIT)]
-    if not sids:
-        print(f"[info] 发现 {len(all_sids)} 个被试，但过滤后为 0。检查 SUBJECTS_FILTER={SUBJECTS_FILTER}")
-        return
-    print(f"[select] 总计发现 {len(all_sids)} 个；将处理 {len(sids)} 个 → {sids}")
+    sids = sid_filter(all_sids)
 
     if not sids:
         print(f"[err] {SRC_NORM_DIR} 下没找到 *_rr.csv 或 *_ecg.*"); return
@@ -214,9 +381,11 @@ def main():
         RR_OUT_DIR.mkdir(parents=True, exist_ok=True)
         # 选择需要绘图预览的被试：
         preview_sid = None
-        if SUBJECTS_FILTER and len(SUBJECTS_FILTER) == 1:
+        # 拿出选中的被试绘图
+        sid_filted = sid_filter(sids)
+        if sid_filted and len(sid_filted) == 1:
             # 用过滤后的列表中第一个（若存在）
-            preview_sid = sids[0] if len(sids) > 0 else None
+            preview_sid = sid_filted[0] if len(sid_filted) > 0 else None
         else:
             preview_sid = sids[0] if len(sids) > 0 else None
         out_rows = []
@@ -335,8 +504,24 @@ def main():
         if rr_dev is not None: ax.plot(bins, hr_dev, label="HR from device RR")
         if rr_ecg is not None: ax.plot(bins, hr_ecg, label="HR from ECG→RR", linestyle="--")
         tit = f"{sid}  MAE={mae:.2f}  bias={bias:+.2f} bpm"
-        ax.set_title(tit); ax.set_xlabel("time (s)"); ax.set_ylabel("bpm"); ax.legend(); ax.grid(True, alpha=.3)
-        fig.tight_layout(); fig.savefig(PREVIEW_DIR / f"preview_{sid}.png", dpi=130); plt.close(fig)
+        # ax.set_title(tit); ax.set_xlabel("time (s)"); ax.set_ylabel("bpm"); ax.legend(); ax.grid(True, alpha=.3)
+        # fig.tight_layout(); fig.savefig(PREVIEW_DIR / f"preview_{sid}.png", dpi=130); plt.close(fig)
+        ax.set_title(tit)
+        ax.set_xlabel("time (s)")
+        ax.set_ylabel("bpm")
+        ax.legend()
+        ax.grid(True, alpha=.3)
+         # 选择横轴范围并叠加 events/acc
+        xmin, xmax = _determine_plot_range(sid, bins)
+        if xmin is not None and xmax is not None:
+            ax.set_xlim(xmin, xmax)
+            rng = (xmin, xmax)
+        else:
+            rng = (bins[0], bins[-1])
+        _overlay_events_and_acc(ax, sid, bins_range=rng)
+        fig.tight_layout()
+        fig.savefig(PREVIEW_DIR / f"preview_{sid}.png", dpi=130)
+        plt.close(fig)
 
     # 无决策文件则生成建议并退出
     if not DEC_FILE.exists():
@@ -367,10 +552,8 @@ def main():
     # 第二阶段：读取决策，产“最终 RR”
     dec = pd.read_csv(DEC_FILE)
     # 若用户设置过滤被试id，只定稿这些 sid；否则定稿表中所有行
-    if SUBJECTS_FILTER:
-        allow = set(_apply_filter(sorted(dec["subject_id"].astype(str).unique()), SUBJECTS_FILTER))
-        dec = dec[dec["subject_id"].astype(str).isin(allow)].copy()
-        print(f"[finalize] 仅对这些被试生成最终 RR：{sorted(allow)}")
+    if sid_filted == 1:
+        print(f"[finalize] 仅对这些被试生成最终 RR：{sorted(sid_filted)}")
 
     out_rows=[]
     for _, r in dec.iterrows():

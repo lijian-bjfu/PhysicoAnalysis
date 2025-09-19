@@ -72,7 +72,7 @@ def load(dataset_cfg: dict, data_dir: Path) -> pd.DataFrame:
             rows.append({"subject_id":"","signal":"","dest":"","status":"skip","note":"unrecognized", "bytes":p.stat().st_size})
             continue
 
-        # sid 从文件名里尽力猜；猜不到就 P001S001T001R001（但我会提醒你）
+        # sid 从文件名里尽力猜；猜不到就 P001S001T001R001
         sid = infer_sid(name) or "P001S001T001R001"
 
         # hr/acc 的厂商后缀（hhr/vhr/hacc/vacc）
@@ -84,7 +84,8 @@ def load(dataset_cfg: dict, data_dir: Path) -> pd.DataFrame:
             sig_out = f"{vendor}acc"
 
         # 事件类单独目录，其他都进 root
-        dest_dir = events if (sig == "events" and events) else root
+        # dest_dir = events if (sig == "events" and events) else root
+        dest_dir = root
         ext = p.suffix.lower() if p.suffix else ""
         if ext == "": ext = ".csv"   # 没后缀就强行补一个，省得乱套
 

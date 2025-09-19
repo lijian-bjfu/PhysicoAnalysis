@@ -28,10 +28,10 @@ from settings import DATASETS, ACTIVE_DATA, DATA_DIR, PROCESSED_DIR, SIGNAL_ALIA
 # 只当“薄壳”，所有脑力外包给小工具
 from scripts.standard.naming import infer_sid, detect_signal
 from scripts.standard.relabel import map_to_standard
-from scripts.standard.schema import to_continuous, to_rr, to_hr
+from scripts.standard.schema import to_continuous, to_rr, to_hr, to_acc, to_events
 
 # 支持的原始后缀（统一由 loader 负责把奇葩格式转成这些）
-RAW_EXTS = {".csv", ".parquet"}
+FILE_TYPES = {".csv", ".parquet"}
 
 # 打印详细信息的开关
 VERBOSE = True
@@ -58,11 +58,12 @@ def _save_standard(std: pd.DataFrame,
     返回：(最终文件路径, 最终信号名)
       - 连续信号(ecg/resp/ppg/acc) → to_continuous → <sid>_<sig>.parquet
       - 逐搏(rr/ppi)                → to_rr         → <sid>_rr.csv
-      - 心率(hr)                     → to_hr         → <sid>_hr.csv
+      - 心率(hr)                    → to_hr         → <sid>_hr.csv
+      - 事件(events)                → to_events     → <sid>_events.csv
     """
     sig_low = sig.lower().strip()
     if sig_low in ("rr", "ppi"):
-        final_sig = "rr"
+        final_sig = sig_low
         out_df = to_rr(std)
         out_path = out_dir / f"{sid}_{final_sig}.csv"
         out_df.to_csv(out_path, index=False)
@@ -75,14 +76,25 @@ def _save_standard(std: pd.DataFrame,
         prev_cols = ["time_s", "hr_bpm"]
     elif sig_low in ("ecg", "resp", "ppg", "acc"):
         final_sig = sig_low
-        out_df = to_continuous(std)
+        if final_sig == "acc":
+            # ACC 专用：三轴加速度 value_x/value_y/value_z
+            out_df = to_acc(std)
+            prev_cols = [c for c in ["time_s", "value_x", "value_y", "value_z", "fs_hz"] if c in out_df.columns]
+        else:
+            # 其它连续信号统一入口
+            out_df = to_continuous(std)
+            out_path = out_dir / f"{sid}_{final_sig}.parquet"
+            prev_cols = [c for c in ["time_s", "value", "fs_hz"] if c in out_df.columns]
+        
         out_path = out_dir / f"{sid}_{final_sig}.parquet"
         out_df.to_parquet(out_path, index=False)
-        # 连续信号常用列
-        prev_cols = [c for c in ["time_s", "value", "fs_hz"] if c in out_df.columns]
+
     elif sig_low == "events":
-        # 你要求：events 完全跳过
-        raise ValueError("events 被显式跳过，不应进入 _save_standard")
+        final_sig = sig_low
+        out_df = to_events(std)
+        out_path = out_dir / f"{sid}_{final_sig}.csv"
+        out_df.to_csv(out_path, index=False)
+        prev_cols = ["time_s", "events"]
     else:
         raise ValueError(f"未支持的信号类型：{sig}")
 
@@ -112,9 +124,9 @@ def main():
         print(f"[norm] load path → {root}")
         print(f"[norm] output path  → {out_dir}")
 
-    files = [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in RAW_EXTS]
+    files = [p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in FILE_TYPES]
     if not files:
-        print(f"[warn] 在 {root} 下没发现可处理文件（{', '.join(RAW_EXTS)}）。先用对应 loader 把原始数据归位。")
+        print(f"[warn] 在 {root} 下没发现可处理文件（{', '.join(FILE_TYPES)}）。先用对应 loader 把原始数据归位。")
         return
 
 
@@ -125,11 +137,14 @@ def main():
     for i, path in enumerate(sorted(files), 1):
         # 只靠文件名识别信号；events 在此就跳过
         sig = detect_signal(path.name, SIGNAL_ALIASES)
+
+        # print(f"[list sig] current sig is {sig}")
+        
+        # if sig == "events":
+        #     if VERBOSE: print(f"[skip] 跳过 events：{path.name}")
+        #     continue
         if not sig:
             if VERBOSE: print(f"[skip] 无法识别信号类型：{path.name}")
-            continue
-        if sig == "events":
-            if VERBOSE: print(f"[skip] 跳过 events：{path.name}")
             continue
 
         # 从文件名推断被试 ID；支持 BIDS & 自定义 pattern
