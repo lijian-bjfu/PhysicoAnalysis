@@ -44,6 +44,7 @@ for _ in range(6):
 
 # 读取 settings
 from settings import PROCESSED_DIR, RAW_CACHE_DIR, PARAMS
+from settings import DATASETS, ACTIVE_DATA, DATA_DIR, PROCESSED_DIR, PARAMS, sid_filter 
 
 # 可选进度条
 try:
@@ -70,9 +71,11 @@ QC_MIN_CUT  = 3.0    # 最短建议片段（秒）
 # 可选：只跑部分被试，例如 ["f1y01","f1o01"], [] 则检查全部被试数据
 SUBJECTS_FILTER: list[str] = ["f1y01","f1o01"]  #
 
-# 目录
-QC_DIR = PROCESSED_DIR / "qc"
-QC_DIR.mkdir(parents=True, exist_ok=True)
+# 输入输出目录
+paths = DATASETS[ACTIVE_DATA]["paths"]
+SRC_NORM_DIR = (DATA_DIR / paths["confirmed"]).resolve()
+CLEAN_OUT_DIR   = (DATA_DIR / paths["clean"]).resolve()
+CLEAN_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 def _find_raw_files() -> list[Path]:
     # 支持两种扩展名，递归搜索
@@ -259,7 +262,7 @@ def main():
         rr_df.to_csv(out_csv, index=False)
 
         # 保存图
-        out_png = QC_DIR / f"{sid}_qc.png"
+        out_png = CLEAN_OUT_DIR / f"{sid}_qc.png"
         _plot_qc(sid, rr_df, spans, out_png)
 
         # 简短统计

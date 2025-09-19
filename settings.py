@@ -33,8 +33,6 @@ DATASETS = {
     },
     "fantasia": {
         "loader": "scripts.loaders.fantasia_loader",
-        "root":   "raw/fantasia",
-        "events": None,
         "options": {
             "records": [],                   # 空=对所有被试数据处理；也可列 ["f1o05","f1o06",...]
             "signals": ["ecg","resp"],       # 要落盘的信号
@@ -66,7 +64,7 @@ EVENTS_DIR    = P("events") if "events" in DATASETS[ACTIVE_DATA]["paths"] else (
 
 
 # 导入器关键词（给 1_data_norm.py 用）
-# 信号别名（用于 detect_signal）
+# 信号别名（用于 detect_signal）。[] 可以加入任意可能的名字
 SIGNAL_ALIASES = {
     "ecg":   ["ecg"],
     "rr":    ["rr","ibi","ppi"],
