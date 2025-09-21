@@ -44,10 +44,10 @@ def _welch_psd(rr_interp_ms: np.ndarray, fs_interp: float = 4.0) -> Tuple[np.nda
     """Welch PSD of mean-removed tachogram (ms). One-sided PSD in (ms^2/Hz)."""
     if rr_interp_ms.size < 16:
         return np.array([]), np.array([])
-    x = rr_interp_ms - np.mean(rr_interp_ms)
+    x = rr_interp_ms
     # 256 points ≈ 64 s at 4 Hz; cap at series length
     nperseg = min(len(x), 256)
-    f, pxx = welch(x, fs=fs_interp, nperseg=nperseg, window=get_window('hann', nperseg), detrend='constant')
+    f, pxx = welch(x, fs=fs_interp, nperseg=nperseg, window=get_window('hann', nperseg), detrend='linear')
     return f, pxx
 
 def _band_power(f: np.ndarray, pxx: np.ndarray, lo: float, hi: float) -> float:
