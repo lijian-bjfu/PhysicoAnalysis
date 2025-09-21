@@ -4,6 +4,17 @@ import numpy as np
 import pandas as pd
 from typing import Optional
 
+# boot
+import sys
+from pathlib import Path
+_p = Path(__file__).resolve()
+for _ in range(6):
+    if (_p.parent / "settings.py").exists():
+        sys.path.insert(0, str(_p.parent)); break
+    _p = _p.parent
+from settings import SCHEMA
+
+
 def _as_seconds(series: pd.Series) -> pd.Series:
     s = pd.to_numeric(series, errors="coerce").astype(float)
     s = s[np.isfinite(s)]
@@ -71,81 +82,98 @@ def map_to_standard(sig: str, df: pd.DataFrame, options: Optional[dict] = None) 
 
     # --------- ECG ----------
     if sig == "ecg":
-        # 优先常见列名；否则按列序兜底
+        t_key  = SCHEMA["ecg"]["t"]
+        v_key  = SCHEMA["ecg"]["v"]
         out = pd.DataFrame({
-            "time_s": _as_seconds(dfl[time]),
-            "value":  pd.to_numeric(dfl[value], errors="coerce")
+            t_key: _as_seconds(dfl[time]),
+            v_key: pd.to_numeric(dfl[value], errors="coerce")
         }).dropna()
         # 采样率估计（如无）
         if "fs_hz" in dfl.columns:
-            out["fs_hz"] = pd.to_numeric(dfl["fs_hz"], errors="coerce").iloc[0]
+            out[SCHEMA]["ecg"]["fs"] = pd.to_numeric(dfl["fs_hz"], errors="coerce").iloc[0]
+
         return out
 
     # --------- RR/PPI ----------
     if sig in ("rr", "ppi"):
+        t_key = SCHEMA["rr"]["t"] if sig == "rr" else SCHEMA["ppi"]["t"]
+        v_key = SCHEMA["rr"]["v"] if sig == "rr" else SCHEMA["ppi"]["v"]
         t = _as_seconds(dfl[time])
         rr = pd.to_numeric(dfl[value], errors="coerce")
         # 单位归一：如果 rr 像“秒”（< 10），转毫秒
         rr_ms = np.where(rr < 10.0, rr * 1000.0, rr)
-        out = pd.DataFrame({"t_s": t, "rr_ms": rr_ms}).dropna()
+        out = pd.DataFrame({t_key: t, v_key: rr_ms}).dropna()
         return out
 
     # --------- HR ----------
     if sig == "hr":
+        t_key = SCHEMA["hr"]["t"]
+        v_key = SCHEMA["hr"]["v"]
         out = pd.DataFrame({
-            "time_s": _as_seconds(dfl[time]),
-            "hr_bpm": pd.to_numeric(dfl[value], errors="coerce")
+            t_key: _as_seconds(dfl[time]),
+            v_key: pd.to_numeric(dfl[value], errors="coerce")
         })
-        return out.dropna(subset=["time_s","hr_bpm"])
+        return out.dropna(subset=[t_key, v_key])
 
     # --------- RESP ----------
     if sig == "resp":
+        t_key = SCHEMA["resp"]["t"]
+        v_key = SCHEMA["resp"]["v"]
         out = pd.DataFrame({
-            "time_s": _as_seconds(dfl[time]),
-            "value":  pd.to_numeric(dfl[value], errors="coerce")
+            t_key: _as_seconds(dfl[time]),
+            v_key: pd.to_numeric(dfl[value], errors="coerce")
         }).dropna()
         if "fs_hz" in dfl.columns:
-            out["fs_hz"] = pd.to_numeric(dfl["fs_hz"], errors="coerce").iloc[0]
+            out[SCHEMA["resp"].get("fs","fs_hz")] = pd.to_numeric(dfl["fs_hz"], errors="coerce").iloc[0]
         return out
 
     # --------- PPG ----------
     if sig == "ppg":
+        t_key = SCHEMA["ppg"]["t"]
+        v_key = SCHEMA["ppg"]["v"]
         out = pd.DataFrame({
-            "time_s": _as_seconds(dfl[time]),
-            "value":  pd.to_numeric(dfl[value], errors="coerce")
+            t_key: _as_seconds(dfl[time]),
+            v_key: pd.to_numeric(dfl[value], errors="coerce")
         }).dropna()
         if "fs_hz" in dfl.columns:
-            out["fs_hz"] = pd.to_numeric(dfl["fs_hz"], errors="coerce").iloc[0]
+            out[SCHEMA["ppg"]["fs"]] = pd.to_numeric(dfl["fs_hz"], errors="coerce").iloc[0]
         return out
 
     # --------- ACC ----------
     # 仅支持 local
     if sig == "acc":
+        t_key = SCHEMA["acc"]["t"]
+        vx_key = SCHEMA["acc"]["vx"]
+        vy_key = SCHEMA["acc"]["vy"]
+        vz_key = SCHEMA["acc"]["vz"]
         vx = cmap.get("x_mg")
         vy = cmap.get("y_mg")
         vz = cmap.get("z_mg")
 
-        base = {"time_s": _as_seconds(dfl[time])}
+        base = {t_key: _as_seconds(dfl[time])}
 
         if not (vx and vy and vz):
             cands = [c for c in dfl.columns if c != time][:3]
             if len(cands) == 3:
                 vx, vy, vz = cands
-            if vx: base["value_x"] = pd.to_numeric(dfl[vx], errors="coerce")
-            if vy: base["value_y"] = pd.to_numeric(dfl[vy], errors="coerce")
-            if vz: base["value_z"] = pd.to_numeric(dfl[vz], errors="coerce")
+            if vx: base[vx_key] = pd.to_numeric(dfl[vx], errors="coerce")
+            if vy: base[vy_key] = pd.to_numeric(dfl[vy], errors="coerce")
+            if vz: base[vz_key] = pd.to_numeric(dfl[vz], errors="coerce")
 
         out = pd.DataFrame(base).dropna()
         if "fs_hz" in dfl.columns:
-            out["fs_hz"] = pd.to_numeric(dfl["fs_hz"], errors="coerce").iloc[0]
+            fs_key = SCHEMA["acc"].get("fs","fs_hz")
+            out[fs_key] = pd.to_numeric(dfl["fs_hz"], errors="coerce").iloc[0]
         return out
 
     # --------- EVENTS / MARKERS ----------
     # 仅支持 local
     if sig in ("markers", "events"):
+        t_key = SCHEMA["events"]["t"]
+        label_key = SCHEMA["events"]["label"]
         out = pd.DataFrame({
-            "time_s": _as_seconds(dfl[time]),
-            "events":  dfl[value]
+            t_key: _as_seconds(dfl[time]),
+            label_key: dfl[value]
         }).dropna()
         return out
 

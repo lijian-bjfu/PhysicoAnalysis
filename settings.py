@@ -10,8 +10,75 @@ DATA_DIR      = PROJECT_ROOT / "data"
 PROCESSED_DIR = DATA_DIR / "processed"
 RAW_CACHE_DIR = DATA_DIR / "raw" / ("fantasia" if DATA_SOURCE=="fantasia" else "local")
 
+# 全局参数，包括清理、切窗、特征提取等数据处理需要的参数
+PARAMS = {
+    # 相邻RR变化率>20% → 伪迹，非静息时，阈值放宽
+    "rr_artifact_threshold": 0.20,   
+    "hr_min_max_bpm": (35, 140),
+    # 'delete' or 'interp'
+    "rr_fix_strategy": "delete",     
+    # 切窗长度，标准5分钟
+    "window_sec": 300,               
+    "overlap_sec": 0,
+    "valid_rr_ratio_min": 0.80,
+    "require_5min_for_freq": True,
+
+    # —— 时域口径 （供 hrv_time 使用） ——
+    # pNNx 阈值（ms），默认 pNN50
+    "pnn_threshold_ms": 50.0,   
+    # 1=样本标准差（推荐），0=总体标准差
+    "sdnn_ddof": 1,             
+
+    # —— 频域口径（供 hrv_freq 使用）——
+    # 若True: 5/4/5/5/5/5分的伪T0–T3
+    "simulate_T0_T3": False,         # 若True: 5/4/5/5/5/5分的伪T0–T3
+    # 将不等间隔 RR 插值为等间隔心动间期序列的内部频谱采样率,默认 4 Hz
+    "fs_interp": 4,
+    # HF 固定带宽 (lo, hi) Hz
+    "hf_band": (0.15, 0.40),  
+    # 计算 lf 时，如果有呼吸数据，可做个性化 hf, 打开此参数，个体化 HF基于呼吸峰±半径计算
+    "use_individual_hf": True, 
+    # 结合呼吸的个性化 hf 的半径（Hz），0.05 表示呼吸峰±0.05。此参数用于调整带宽的跨度。
+    "hf_band_radius_hz": 0.05,
+    # 是否对 hrv lf, hf 进行对数化操作（ln ms²），默认打开
+    "log_power": True,
+
+    # —— RSA 窦性呼吸性心律不齐口径（供 hrv_rsa 使用） ——
+    # RSA 前是否把该段呼吸时间重置为0，只影响 RSA 模块
+    "rsa_rebase_resp": True,
+    # 呼吸生理范围（次/分）。用于筛掉不合生理的峰间期：
+    #   最低 6 次/分 ≈ 0.10 Hz；最高 30 次/分 ≈ 0.50 Hz。
+    #   若你的被试常进行慢呼吸训练，可适当下调 resp_min_bpm（例如 4）。
+    "resp_min_bpm": 6.0,
+    "resp_max_bpm": 30.0,
+
+    # 呼吸峰检测的“显著性”门槛（scipy.signal.find_peaks 的 prominence）。
+    #   0 表示不过滤，仅凭距离与生理范围约束。数值越大，挑选的峰越“尖锐”，可抑制噪声导致的虚假峰。
+    #   经验：干净带子=0；PPG/胸带偶有飘动=0.1～0.3（需按数据幅度调整）。
+    "resp_peak_prominence": 0.0,
+
+    # 每个呼吸周期内用于计算 RSA（max RR - min RR）的最少 RR 个数。
+    #   若 RR 太稀/段太短，周期内 RR 少于该阈值将被跳过，避免极端值。
+    "rsa_min_rr_per_breath": 2,
+
+    # 对多个呼吸周期的 RSA 汇总方式：'mean' 或 'median'。
+    #   一般用 'mean'；若存在少数异常大/小的周期，'median' 更稳健。
+    "rsa_agg": "mean",
+
+    # （可选）呼吸采样率覆盖值（Hz）。
+    #   若你的呼吸设备恒定采样率且文件中时间戳不可靠，可在此指定固定采样率，
+    #   例如 50.62851860274504。留空或 None 表示不覆盖，仍以数据时间戳为准。
+    "resp_fs_hz_override": None,
+
+    # （可选）将呼吸视为“等间隔采样”标志。
+    #   True：在部分工具链只提供样点序号的场景下，可结合 resp_fs_hz_override 生成时间轴；
+    #   False：严格使用文件中提供的时间戳（推荐）。
+    "resp_assume_uniform": False,
+    
+}
+
 # 指定数据集
-ACTIVE_DATA = "local"
+ACTIVE_DATA = "fantasia"
 
 DATASETS = {
     "local": {
@@ -19,22 +86,144 @@ DATASETS = {
         "options": {
             "sid_pattern": "P{p:03d}S{s:03d}T{t:03d}R{r:03d}",  # 文件名生成用
             "ask_dir": True,                                   # 打开系统对话框选目录
-            "copy_mode": "copy2"                               # 把原始文件载入 raw 文件夹的方法：copy/copy2/move
+            "copy_mode": "copy2",                              # 把原始文件载入 raw 文件夹的方法：copy/copy2/move
         },
         "paths": {
             "raw":       "raw/local",                  # 归位后的原始（或导入）文件
+            "groups":   "groups/local",                 # 分组信息
             "norm":      "processed/norm/local",       # 2_data_norm 的输出
             "confirmed": "processed/confirmed/local",  # 3_select_rr 最终 RR
-            "clean":        "processed/clean/loacal",   # 检验并清理数据
+            "clean":        "processed/clean/local",   # 检验并清理数据
             "windowing": "processed/windowing/local",  # 切窗
             "features":  "processed/features/local",   # 6x 特征输出
+            "final":    "processed/final/local",        # 最终的数据表
             "events":    "raw/local/events"            # 原始事件标记（若有）
-        }
+        },
+        # 分组信息。分组信息多数可以从sid中获取
+        "groups": {
+            "sample": "P001S001T001R001",
+            # 切片法，指定哪几个字符是分组信息
+            "group_map": {
+                "session": {"start": 4, "end": 7},  # 左闭右开，0 起算
+                "task":    {"start": 8, "end": 11},
+                "run":     {"start": 12, "end": 15}
+            },
+            # 为各组赋值
+            "value": {
+                "session":{
+                    "001": 1,
+                    "002": 2,
+                },
+                "task":{
+                    "001": 1,
+                    "002": 2,
+                },
+                "run":{
+                    "001": 1,
+                    "002": 2,
+                },
+            },
+            # 最终会使用哪些组
+            "use": ["task",],
+        },
+        # windowing 下必需配置的两项：use, method
+        "windowing":{
+            # 说明：这里仅定义“切窗策略的配置”，真正执行在 4_windowing.py
+            "use": "single",  # 默认切窗方法，可选：events / single / sliding / events_single / events_sliding / single_sliding
+
+            # 切窗方法。包括 cover 和 subdivide 两种。cover 重新切窗覆盖之前的数据，subdivide 选择一段数据切窗
+            "method": "subdivide", # cover | subdivide
+
+            # 统一默认值（单位一律为秒）
+            "defaults": {
+                "win_len_s": PARAMS["window_sec"],                 # 缺省窗长（用于需要窗长的模式）
+                "bound_policy": "trim"                             # 超界时裁剪（不报错）
+            },
+
+            # 切到哪些信号（不存在则自动跳过）
+            "apply_to": ["rr","resp","acc"],
+
+            # 各模式参数（仅在被选中时读取）
+            "modes": {
+                # 1) 事件整段：按事件配对切段；不需要窗长
+                "events": {
+                    "events_path": "processed/norm/local",    # 事件文件路径；None 表示不支持
+                    "pairs": [
+                        ["baseline_start","stim_start"],
+                        ["stim_start","stim_end"],
+                        ["stim_end","intervention_start"],
+                        ["intervention_start","intervention_end"]
+                    ],
+                    # 兼容旧字段名（若下游脚本误读）
+                    "path": "processed/norm/local"
+                },
+
+                # 2) 单段：按绝对时间或锚点切一个段
+                # 三选一：给 [start_s,end_s]；或 [start_s,win_len_s]；或 [anchor_time_s,win_len_s]
+                # 时间按照绝对描述计算，可以从直接从上一层 level*/index.csv 
+                # 里读 t_start_s 那一列的数值，按上面加减就行。
+                # 比如 t_start_s = 739627.929，5分钟窗口 win_len = 300
+                "single": {"start_s": None, "end_s": None, "win_len_s": 300, "anchor_time_s": 739627.929},
+
+                # 3) 滑窗：在 [start_s,end_s] 范围内按 win_len/stride 切窗
+                "sliding": {"start_s": None, "end_s": None, "win_len_s": None, "stride_s": None},
+
+                # 4) 事件 + 单段：以事件为锚，局部切一个窗口
+                "events_single": {
+                    "events_path": "processed/norm/local",
+                    "anchor_event": None,   # 事件名，来自 EVENTS_CANON；None 则报错
+                    "offset_s": 0.0,        # 相对锚点的偏移，秒；可为负
+                    "win_len_s": None
+                },
+
+                # 5) 事件 + 滑窗：在某个事件区间内滑窗
+                "events_sliding": {
+                    "events_path": "processed/norm/local",
+                    "segment": ["intervention_start","intervention_end"],  # 必填：事件名对
+                    "win_len_s": None,
+                    "stride_s":  None
+                },
+
+                # 6) 单段 + 滑窗：先定边界，再滑窗
+                "single_sliding": {"start_s": None, "end_s": None, "win_len_s": None, "stride_s": None}
+            },
+
+            # 窗口含义命名模板（写入每个窗的 meaning 字段）
+            "labeling": {
+                "events":         "{e0}->{e1}",
+                "single":         "single[{s:.1f},{e:.1f}]",
+                "sliding":        "sliding[{s:.1f},{e:.1f}]/{w:.0f}",
+                "events_single":  "{anchor}+{off:+.1f}s x {w:.0f}",
+                "events_sliding": "{seg0}->{seg1} / {w:.0f}/{step:.0f}",
+                "single_sliding": "range[{s:.1f},{e:.1f}] / {w:.0f}/{step:.0f}"
+            },
+        },
+        # 输出参数
+        "signal_features": [
+            # -- 频域特征
+            "hf_ms2", 
+            "hf_log_ms2", 
+            "lf_ms2", 
+            "lf_log_ms2", 
+            # "hf_band_used", 
+            # "hf_center_hz",
+            # -- 时域特征
+            "mean_hr_bpm",
+            "rmssd_ms",
+            "sdnn_ms",
+            "pnn50_pct",
+            "sd1_ms",
+            "sd2_ms",
+            # rsa 特征
+            "rsa_ms",
+            "resp_rate_bpm",
+            # "n_breaths_used",
+            # "rsa_method",
+            ],
     },
     "fantasia": {
         "loader": "scripts.loaders.fantasia_loader",
         "options": {
-            "records": [],                   # 空=对所有被试数据处理；也可列 ["f1o05","f1o06",...]
             "signals": ["ecg","resp"],       # 要落盘的信号
             "prefer_local_wfdb": True,       # 有 .hea/.dat/.ecg 就本地解析
             "allow_network": False,          # 禁止联网（你已有 subset）
@@ -42,12 +231,70 @@ DATASETS = {
         },
         "paths": {
             "raw":       "raw/fantasia/",
+            "groups":   "groups/fantasia",  
             "norm":      "processed/norm/fantasia",
             "confirmed": "processed/confirmed/fantasia",
             "clean":        "processed/clean/fantasia",   # 检验并清理数据
             "windowing": "processed/windowing/fantasia",  # 切窗
             "features":  "processed/features/fantasia",
-        }
+            "final":    "processed/final/fantasia",        # 最终的数据表
+        },
+        "groups": {
+            "sample": "f1o01 | f1y01",
+            "group_map": {
+                "age": {"start": 2, "end": 3},  # 左闭右开，0 起算
+            },
+            "value": {
+                "age":{
+                    "o": 1,
+                    "y": 2,
+                },
+            },
+            "use": ["age"],
+        },
+        "windowing":{
+            "use": "single_sliding",  # 没有事件，默认滑窗
+            "method": "cover", # cover | subdivide
+            "apply_to": ["rr"],
+            "defaults": {
+                "win_len_s": PARAMS["window_sec"],
+                "bound_policy": "trim"
+            },
+            "modes": {
+                "events": {"events_path": None, "path": None},
+                "single": {"start_s": None, "end_s": None, "win_len_s": None, "anchor_time_s": None},
+                "sliding": {"start_s": None, "end_s": None, "win_len_s": None, "stride_s": None},
+                "events_single": {"events_path": None, "anchor_event": None, "offset_s": 0.0, "win_len_s": None},
+                "events_sliding": {"events_path": None, "segment": None, "win_len_s": None, "stride_s": None},
+                # 该数据没有 events，可以用 cover + single_sliding , 去掉开始的 2分钟，不设结尾，10分钟一个窗。
+                "single_sliding": {"start_s": 120, "end_s": 999999, "win_len_s": 600, "stride_s": 0}
+            },
+            "labeling": {
+                "events":         "{e0}->{e1}",
+                "single":         "single[{s:.1f},{e:.1f}]",
+                "sliding":        "sliding[{s:.1f},{e:.1f}]/{w:.0f}",
+                "events_single":  "{anchor}+{off:+.1f}s x {w:.0f}",
+                "events_sliding": "{seg0}->{seg1} / {w:.0f}/{step:.0f}",
+                "single_sliding": "range[{s:.1f},{e:.1f}] / {w:.0f}/{step:.0f}"
+            }
+        },
+        # 输出参数
+        "signal_features": [
+            # -- 频域特征
+            "hf_ms2", 
+            "hf_log_ms2", 
+            "lf_ms2", 
+            "lf_log_ms2", 
+            # "hf_band_used", 
+            # "hf_center_hz",
+            # -- 时域特征
+            "mean_hr_bpm",
+            "rmssd_ms",
+            "sdnn_ms",
+            "pnn50_pct",
+            "sd1_ms",
+            "sd2_ms",
+            ],
     }
     # "wesad": {...} 任何开源数据
 }
@@ -76,12 +323,40 @@ SIGNAL_ALIASES = {
 }
 DEVICE_TAGS = {"h10":"h", "verity":"v"}
 
+# ---------- Column name schema (canonical output labels) ----------
+SCHEMA = {
+  # 每心跳
+  "rr":     {"t": "t_s",      "v": "rr_ms"},
+  "ppi":    {"t": "t_s",      "v": "rr_ms"},
+  # 心率
+  "hr":     {"t": "t_s",      "v": "bpm"},
+  # 连续值
+  "ecg":    {"t": "time_s",   "v":"value",    "fs":"fs_hz"},
+  "resp":   {"t": "time_s",   "v": "value", "fs":"fs_hz"},
+  "ppg":    {"t": "t_s",      "v": "value",   "fs":"fs_hz"},
+  # 三轴加速度
+  "acc":    {"t": "time_s",   "vx":"value_x", "vy":"value_y", "vz":"value_z"},
+  # 事件标记
+  "events": {"t": "time_s",   "label": "events"},
+}
+
+# ---------- Canonical event names (project-local vocabulary) ----------
+EVENTS_CANON = [
+  "baseline_start",
+  "stim_start",
+  "stim_end",
+  "intervention_start",
+  "intervention_end",
+  "stop",
+]
+
+
 # --- 用户过滤配置（支持短号） ---------------------------------
 # 例子：
 # SUBJECTS_FILTER = []                  # 空：处理全部
 # SUBJECTS_FILTER = ["P001S001T001R001"]# 指定完整 sid
 # SUBJECTS_FILTER = ["001","002"]       # 短号：匹配 P001…、P002…
-SUBJECTS_FILTER = ["001"]  # 用完记得清空或改
+SUBJECTS_FILTER = []  # 用完记得清空或改
 
 # 限制最多预览多少个（None 表示不限）
 PREVIEW_LIMIT = None
@@ -140,22 +415,6 @@ RR_SCORE = {
     "w_flag": 0.50,   # 伪迹率越低越好（权重）
     "w_mae":  0.30,   # 与另一来源的一致性（1Hz HR 的 MAE）
     "w_bias": 0.20,   # 系统性偏差（绝对 Bias）
-}
-
-# 清洗与分窗参数（全局）
-PARAMS = {
-    "rr_artifact_threshold": 0.20,   # 相邻RR变化率>20% → 伪迹，非静息时，阈值放宽
-    "hr_min_max_bpm": (35, 140),
-    "rr_fix_strategy": "delete",     # 'delete' or 'interp'
-    "window_sec": 300,               # 标准5分钟
-    "overlap_sec": 0,
-    "simulate_T0_T3": False,         # 若True: 5/4/5/5/5/5分的伪T0–T3
-    "hf_band": (0.15, 0.40),
-    "use_individual_hf": True,
-    "hf_band_radius_hz": 0.05,
-    "log_power": True,
-    "valid_rr_ratio_min": 0.80,
-    "require_5min_for_freq": True,
 }
 
 # 原始数据快查表 2qc_rr_<sid>*.csv

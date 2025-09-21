@@ -23,7 +23,7 @@ for _ in range(6):
     _p = _p.parent
 # --- end bootstrap ---
 
-from settings import DATASETS, ACTIVE_DATA, DATA_DIR, PROCESSED_DIR, SIGNAL_ALIASES
+from settings import DATASETS, ACTIVE_DATA, DATA_DIR, PROCESSED_DIR, SIGNAL_ALIASES, SCHEMA
 
 # 只当“薄壳”，所有脑力外包给小工具
 from scripts.standard.naming import infer_sid, detect_signal
@@ -67,19 +67,19 @@ def _save_standard(std: pd.DataFrame,
         out_df = to_rr(std)
         out_path = out_dir / f"{sid}_{final_sig}.csv"
         out_df.to_csv(out_path, index=False)
-        prev_cols = ["t_s", "rr_ms"]
+        prev_cols = [SCHEMA["rr"]["t"], SCHEMA["rr"]["v"]]
     elif sig_low == "hr":
         final_sig = "hr"
         out_df = to_hr(std)
         out_path = out_dir / f"{sid}_{final_sig}.csv"
         out_df.to_csv(out_path, index=False)
-        prev_cols = ["time_s", "hr_bpm"]
+        prev_cols = [SCHEMA["hr"]["t"], SCHEMA["hr"]["v"]]
     elif sig_low in ("ecg", "resp", "ppg", "acc"):
         final_sig = sig_low
         if final_sig == "acc":
             # ACC 专用：三轴加速度 value_x/value_y/value_z
             out_df = to_acc(std)
-            prev_cols = [c for c in ["time_s", "value_x", "value_y", "value_z", "fs_hz"] if c in out_df.columns]
+            prev_cols = [c for c in [SCHEMA["acc"]["t"], SCHEMA["acc"]["vx"], SCHEMA["acc"]["vy"], SCHEMA["acc"]["vz"], "fs_hz"] if c in out_df.columns]
         else:
             # 其它连续信号统一入口
             out_df = to_continuous(std)
@@ -93,7 +93,7 @@ def _save_standard(std: pd.DataFrame,
         final_sig = sig_low
         out_df = to_events(std)
         out_path = out_dir / f"{sid}_{final_sig}.csv"
-        out_df.to_csv(out_path, index=False)
+        prev_cols = [SCHEMA["events"]["t"], SCHEMA["events"]["label"]]
         prev_cols = ["time_s", "events"]
     else:
         raise ValueError(f"未支持的信号类型：{sig}")

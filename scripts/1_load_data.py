@@ -1,5 +1,4 @@
 # scripts/1_load_data.py
-# scripts/1_load_data.py
 import importlib
 import pandas as pd
 from pathlib import Path
