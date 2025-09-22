@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 import re
 import pandas as pd
+import numpy as np
 from typing import List, Dict, Optional
 from tqdm import tqdm
 
@@ -117,6 +118,63 @@ def _load_segment(sid: str, sig: str, wid: int) -> Optional[pd.DataFrame]:
     except Exception as e:
         print(f"[WARN] 读取失败：{fpath.name} -> {e}")
         return None
+
+
+# --- RR window QC (minimal) -------------------------------------------------
+def _qc_rr_window(rr_df: pd.DataFrame, w_s: Optional[float], w_e: Optional[float]) -> Dict[str, Optional[float]]:
+    """Compute per-window RR quality metrics with minimal scope.
+    Returns two fields:
+      - rr_valid_ratio: sum(rr_ms)/window_length_in_seconds, clipped to [0,1.0] if window length is finite
+      - rr_max_gap_s:   max(diff(t_s)) within the window (seconds)
+    If inputs are insufficient, returns NaN for the metric(s).
+    """
+    # Validate window length
+    try:
+        win_len = float(w_e) - float(w_s)
+    except Exception:
+        win_len = np.nan
+    if not np.isfinite(win_len) or win_len <= 0:
+        win_len = np.nan
+
+    # Clean RR table
+    if rr_df is None or rr_df.empty:
+        return {"rr_valid_ratio": np.nan, "rr_max_gap_s": np.nan}
+    rr = rr_df.copy()
+    if "t_s" not in rr.columns or "rr_ms" not in rr.columns:
+        return {"rr_valid_ratio": np.nan, "rr_max_gap_s": np.nan}
+    rr["t_s"] = pd.to_numeric(rr["t_s"], errors="coerce")
+    rr["rr_ms"] = pd.to_numeric(rr["rr_ms"], errors="coerce")
+    rr = rr.dropna(subset=["t_s", "rr_ms"])  # keep only valid rows
+
+    # rr_max_gap_s
+    if len(rr) > 1:
+        try:
+            rr_max_gap_s = float(np.nanmax(np.diff(rr["t_s"].to_numpy(float))))
+        except Exception:
+            rr_max_gap_s = np.nan
+    else:
+        rr_max_gap_s = np.nan
+
+    # rr_valid_ratio
+    if np.isfinite(win_len) and len(rr) > 0:
+        try:
+            coverage_s = float(rr["rr_ms"].sum() / 1000.0)
+            # Clip coverage to window length if finite
+            if np.isfinite(win_len):
+                coverage_s = float(np.clip(coverage_s, 0.0, win_len))
+            rr_valid_ratio = coverage_s / win_len if np.isfinite(win_len) and win_len > 0 else np.nan
+        except Exception:
+            rr_valid_ratio = np.nan
+    else:
+        rr_valid_ratio = np.nan
+
+    # Optional rounding for stable CSV appearance
+    if np.isfinite(rr_valid_ratio):
+        rr_valid_ratio = round(float(rr_valid_ratio), 3)
+    if np.isfinite(rr_max_gap_s):
+        rr_max_gap_s = round(float(rr_max_gap_s), 3)
+
+    return {"rr_valid_ratio": rr_valid_ratio, "rr_max_gap_s": rr_max_gap_s}
 
 
 def main():
@@ -266,6 +324,9 @@ def main():
 
         feat_df = pd.concat(feat_parts, axis=1) if feat_parts else pd.DataFrame()
 
+        # per-window RR QC (minimal): rr_valid_ratio, rr_max_gap_s
+        qc = _qc_rr_window(rr_df, meta_row.get("w_s", np.nan), meta_row.get("w_e", np.nan))
+
         row = {
             "subject_id": sid,
             "w_id": wid,
@@ -278,6 +339,9 @@ def main():
                 row[c] = feat_df.iloc[0][c]
             else:
                 row[c] = pd.NA
+
+        # attach QC metrics
+        row.update(qc)
 
         rows.append(row)
         n_rows += 1
