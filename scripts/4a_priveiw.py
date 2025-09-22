@@ -23,8 +23,12 @@ OUT_ROOT = (DATA_DIR / paths["preview"] ).resolve()
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
 PRE_SID: List = DS["preview_sids"] # 选择 PRE_SID[0]
 PRE_SIG: List = DS["windowing"]["apply_to"] # 选择列表中的所有信号
-FILR_TYPES = ["csv", "parquet"]
+FILE_TYPES = ["csv", "parquet"]
 
+# 不按照系统设定，临时检查文件
+SRC_DIR = (DATA_DIR / paths["confirmed"])
+PRE_SID = ["f1y05"]
+PRE_SIG = ["rr"]
 
 # Use SCHEMA-defined canonical column names first, then fallback heuristics
 def _get_time_col(df: pd.DataFrame, signal: str) -> Optional[str]:
@@ -98,29 +102,6 @@ def _find_signal_file(src_dir: Path, sid: str, signal: str) -> Optional[Path]:
             return sorted(hits)[0]
     return None
 
-def _choose_time_col(df: pd.DataFrame) -> Optional[str]:
-    for c in TIME_CANDIDATES:
-        if c in df.columns:
-            return c
-    # try to infer a monotonic numeric column named like time
-    for c in df.columns:
-        if df[c].dtype.kind in "fi" and df[c].is_monotonic_increasing:
-            return c
-    return None
-
-def _choose_value_col(df: pd.DataFrame, signal: str, tcol: str) -> Optional[str]:
-    prefs = PREF_COLS.get(signal, [])
-    for c in prefs:
-        if c in df.columns:
-            return c
-    # fallback: first numeric column excluding time
-    for c in df.columns:
-        if c == tcol:
-            continue
-        if df[c].dtype.kind in "fi":
-            return c
-    return None
-
 def _maybe_compute_hr(df: pd.DataFrame, vcol: str, signal: str) -> pd.Series:
     # If RR present as ms, derive HR for interpretability; otherwise use original
     series = df[vcol]
@@ -190,7 +171,7 @@ def plot_quick_preview():
             continue
         ax.plot(df["time_s"].values, df["norm"].values, label=sig.upper(), linewidth=1.0, alpha=0.9, color=colors[i])
 
-    ax.set_title(f"{sid} quick multi-signal preview (normalized)", fontsize=14)
+    ax.set_title(f"{sid} quick {PRE_SIG} preview (normalized)", fontsize=14)
     ax.set_xlabel("time (s)")
     ax.set_ylabel("normalized amplitude")
     ax.legend(loc="upper right", ncol=1, frameon=True)

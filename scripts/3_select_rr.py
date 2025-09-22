@@ -14,13 +14,14 @@ for _ in range(6):
     if (_p.parent / "settings.py").exists():
         sys.path.insert(0, str(_p.parent)); break
     _p = _p.parent
-from settings import DATASETS, ACTIVE_DATA, DATA_DIR, PROCESSED_DIR, RR_COMPARE, PARAMS, RR_SCORE, sid_filter  # RR_SCORE 可选，若未在 settings 中定义将使用默认权重
+from settings import DATASETS, ACTIVE_DATA, DATA_DIR, PROCESSED_DIR, RR_COMPARE, PARAMS, RR_SCORE  # RR_SCORE 可选，若未在 settings 中定义将使用默认权重
 
 paths = DATASETS[ACTIVE_DATA]["paths"]
 SRC_NORM_DIR = (DATA_DIR / paths["norm"]).resolve()
 RR_OUT_DIR   = (DATA_DIR / paths["confirmed"]).resolve()
 PREVIEW_DIR  = (PROCESSED_DIR / "rr_select" / ACTIVE_DATA).resolve()
 PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+PRE_SID = DATASETS[ACTIVE_DATA]["preview_sids"]
 
 # 画图横轴范围策略，基于事件标注起始点绘制，基于hr波长起始点
 # 'auto' | 'events' | 'hr'
@@ -29,6 +30,9 @@ PLOT_RANGE_MODE = 'auto'
 
 DEC_SUGG = PREVIEW_DIR / "decision_suggested.csv"
 DEC_FILE = PREVIEW_DIR / "decision.csv"
+
+# 仅输出列表中被试的结果，用于快速检验。列表为空时，输出所有被试数据
+PRE_SID = []
 
 # 读取 ecg 数据
 def _read_ecg(sid: str):
@@ -57,6 +61,28 @@ def _ecg_to_rr(ecg_df: pd.DataFrame):
     t = df["time_s"].to_numpy(float)
     sig = df["value"].to_numpy(float)
     n = len(sig)
+
+    # 取被试ID用于报告（若列存在）
+    sid_dbg = ""
+    try:
+        if "subject_id" in df.columns and pd.notna(df["subject_id"].iloc[0]):
+            sid_dbg = str(df["subject_id"].iloc[0])
+    except Exception:
+        sid_dbg = ""
+
+    # 时间轴质量检查：非单调与大缺口
+    if n > 2:
+        dt_vec = np.diff(t)
+        if (dt_vec <= 0).any():
+            cnt = int(np.sum(dt_vec <= 0))
+            prefix = f"[{sid_dbg}] " if sid_dbg else ""
+            print(f"{prefix}[error] ECG 时间戳非单调，出现 {cnt} 个非正步长；后续 RR 可能不可靠。")
+        med_dt = float(np.nanmedian(dt_vec))
+        if np.isfinite(med_dt):
+            max_dt = float(np.nanmax(dt_vec))
+            if max_dt > 5.0 * med_dt:
+                prefix = f"[{sid_dbg}] " if sid_dbg else ""
+                print(f"{prefix}[warn] ECG 时间轴存在缺口：median dt={med_dt:.6f}s, max dt={max_dt:.3f}s")
 
     # 2) 采样率稳健估计：优先用列里的 fs_hz；不靠谱就用 dt 中位数反推
     fs_col = df.get("fs_hz", pd.Series([np.nan])).iloc[0]
@@ -89,9 +115,65 @@ def _ecg_to_rr(ecg_df: pd.DataFrame):
         print("[warn] ECG→RR：R 峰过少，放弃")
         return None
 
-    rr_ms = np.diff(rpeaks) / fs * 1000.0
-    t_rr  = t[rpeaks[1:]]
-    return pd.DataFrame({"t_s": t_rr, "rr_ms": rr_ms})
+    # 优先使用“时间戳差”计算 RR，fs 仅用于滤波与峰检
+    r_times = t[rpeaks].astype(float)
+    rr_ms_t  = np.diff(r_times) * 1000.0
+    t_rr     = r_times[1:]
+
+    # === QC_BEGIN: CROSS-GAP REJECTION =======================================
+    # 禁止跨采样“缺口(dt > gap_thr)”计算 RR，避免把采样空洞计入 RR
+    try:
+        dt_all = np.diff(t)
+        med_dt = float(np.nanmedian(dt_all[dt_all > 0])) if dt_all.size else np.nan
+        gap_thr = float(max(5.0 * med_dt, 0.1)) if np.isfinite(med_dt) else 0.1  # 阈值：5×中位步长或0.1s
+        gap_mask = (dt_all > gap_thr) if dt_all.size else None  # 长度 = n-1
+        if gap_mask is not None and len(rpeaks) > 1:
+            # 对每个相邻R峰 [r_i, r_{i+1})，若其中存在 gap，则丢弃该 RR
+            drop = np.zeros(len(rr_ms_t), dtype=bool)
+            for i in range(len(rpeaks) - 1):
+                if gap_mask[rpeaks[i]: rpeaks[i+1]].any():
+                    drop[i] = True
+            n_drop = int(drop.sum())
+            if n_drop > 0:
+                prefix = f"[{sid_dbg}] " if sid_dbg else ""
+                print(f"{prefix}[warn] 丢弃跨缺口 RR：{n_drop} 个（gap_thr≈{gap_thr:.3f}s）")
+                rr_ms_t = rr_ms_t[~drop]
+                t_rr    = t_rr[~drop]
+    except Exception:
+        pass
+    # === QC_END: CROSS-GAP REJECTION =========================================
+
+    # === QC_BEGIN: RPEAK_DROPOUT_DETECT ======================================
+    # 监测 120s 之后的R峰密度是否显著下降，提示可能的掉峰/阈值失配
+    try:
+        if len(r_times) > 10:
+            t_min = float(np.nanmin(r_times))
+            t_max = float(np.nanmax(r_times))
+            t_boundary = t_min + 120.0
+            if t_max - t_boundary >= 30.0:  # 后段至少30秒才有意义
+                pre_mask  = r_times <  t_boundary
+                post_mask = r_times >= t_boundary
+                dur_pre   = max(t_boundary - t_min, 1e-6)
+                dur_post  = max(t_max - t_boundary, 1e-6)
+                rate_pre  = float(pre_mask.sum() / dur_pre)   # 峰/秒
+                rate_post = float(post_mask.sum() / dur_post) # 峰/秒
+                # 条件：后段密度远低于前段且绝对值很低（<0.3峰/秒≈18 bpm）
+                if pre_mask.sum() >= 30 and rate_post < 0.5 * rate_pre and rate_post < 0.3:
+                    prefix = f"[{sid_dbg}] " if sid_dbg else ""
+                    print(f"{prefix}[warn] R-peaks 密度在 ~120s 后显著下降：pre={rate_pre:.3f}/s, post={rate_post:.3f}/s")
+    except Exception:
+        pass
+    # === QC_END: RPEAK_DROPOUT_DETECT ========================================
+
+    # 诊断：与“索引差/全局fs”法比较，若差异过大则告警
+    try:
+        rr_ms_fs = np.diff(np.asarray(rpeaks, dtype=float)) / float(fs) * 1000.0
+        m = np.nanmedian(np.abs(rr_ms_t - rr_ms_fs[:len(rr_ms_t)]))
+        if np.isfinite(m) and m > 50.0:
+            print(f"[warn] RR by time vs by fs diverge (|Δ| median≈{m:.1f} ms).")
+    except Exception:
+        pass
+    return pd.DataFrame({"t_s": t_rr, "rr_ms": rr_ms_t})
 
 # 从 <sid>_rr.csv 读设备原生 RR
 def _read_device_rr(sid: str):
@@ -369,8 +451,12 @@ def main():
     # 找到所有 被测id <sid>（有 rr 或 ecg 的算）
     sids = sorted({p.stem.split("_")[0] for p in SRC_NORM_DIR.glob("*_rr.csv")}|{p.stem.split("_")[0] for p in SRC_NORM_DIR.glob("*_ecg.*")})
     # 仅挑选用户指定的被试
-    all_sids = sids
-    sids = sid_filter(all_sids)
+    # 被试过滤：仅输出 PRE_SID 指定的被试；为空则全量
+    if isinstance(PRE_SID, (list, tuple)) and len(PRE_SID) > 0:
+        sids = [s for s in sids if s in PRE_SID]
+        print(f"[select] 仅处理 {len(sids)} 个被试 → {sids}")
+        if not sids:
+            print("[info] 过滤后为空，退出。"); return
 
     if not sids:
         print(f"[err] {SRC_NORM_DIR} 下没找到 *_rr.csv 或 *_ecg.*"); return
@@ -382,10 +468,10 @@ def main():
         # 选择需要绘图预览的被试：
         preview_sid = None
         # 拿出选中的被试绘图
-        sid_filted = sid_filter(sids)
-        if sid_filted and len(sid_filted) == 1:
+        pre_sid = PRE_SID
+        if pre_sid and len(pre_sid) == 1:
             # 用过滤后的列表中第一个（若存在）
-            preview_sid = sid_filted[0] if len(sid_filted) > 0 else None
+            preview_sid = pre_sid[0] if len(pre_sid) > 0 else None
         else:
             preview_sid = sids[0] if len(sids) > 0 else None
         out_rows = []
@@ -552,8 +638,8 @@ def main():
     # 第二阶段：读取决策，产“最终 RR”
     dec = pd.read_csv(DEC_FILE)
     # 若用户设置过滤被试id，只定稿这些 sid；否则定稿表中所有行
-    if sid_filted == 1:
-        print(f"[finalize] 仅对这些被试生成最终 RR：{sorted(sid_filted)}")
+    if pre_sid == 1:
+        print(f"[finalize] 仅对这些被试生成最终 RR：{sorted(pre_sid)}")
 
     out_rows=[]
     for _, r in dec.iterrows():
