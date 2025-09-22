@@ -44,7 +44,9 @@ for _ in range(6):
 
 # 读取 settings
 from settings import PROCESSED_DIR, RAW_CACHE_DIR, PARAMS
-from settings import DATASETS, ACTIVE_DATA, DATA_DIR, PROCESSED_DIR, PARAMS, sid_filter 
+from settings import DATASETS, ACTIVE_DATA, DATA_DIR, PROCESSED_DIR, PARAMS
+
+PRE_SID = DATASETS[ACTIVE_DATA]["preview_sids"]
 
 # 可选进度条
 try:

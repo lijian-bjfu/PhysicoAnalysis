@@ -44,22 +44,40 @@ print(f"[INFO] hrv_rsa module: {getattr(f_rsa, '__file__', 'unknown')}")
 FILE_RE = re.compile(r"^(?P<sid>[^_]+)_(?P<sig>[^_]+)_w(?P<wid>\d+)\.csv$")
 
 
-def _read_index(index_path: Path) -> pd.DataFrame:
-    if not index_path.exists():
-        raise FileNotFoundError(f"collected_index.csv not found at {index_path}")
-    df = pd.read_csv(index_path)
-    # 保留必要列
-    need = ["w_id", "meaning"]
-    missing = [c for c in need if c not in df.columns]
+def _read_index(index_dir: Path) -> pd.DataFrame:
+    """Read collected index and normalize to columns:
+       subject_id, w_id (final order), meaning, w_s, w_e
+    """
+    idx_path = index_dir / "collected_index.csv"
+    if not idx_path.exists():
+        # fallback if user used a shorter name by mistake
+        alt = index_dir / "collect_index.csv"
+        if alt.exists():
+            idx_path = alt
+        else:
+            raise FileNotFoundError(f"collected_index.csv not found at {index_dir}")
+    df = pd.read_csv(idx_path)
+    # prefer final_order as the window id used in filenames; else fall back to w_id if that is the final order
+    key_col = "final_order" if "final_order" in df.columns else "w_id"
+    need_core = ["subject_id", key_col, "meaning"]
+    missing = [c for c in need_core if c not in df.columns]
     if missing:
-        raise ValueError(f"collected_index.csv 缺少必要列: {missing}")
-    # 窗口编号统一为 int
+        raise ValueError(f"{idx_path.name} 缺少必要列: {missing}")
+    out = df[need_core].copy()
+    out = out.rename(columns={key_col: "w_id"})
+    # optional w_s / w_e
+    for c in ("w_s", "w_e"):
+        if c in df.columns:
+            out[c] = pd.to_numeric(df[c], errors="coerce")
+        else:
+            out[c] = pd.NA
+    # normalize types
+    out["subject_id"] = out["subject_id"].astype(str)
     try:
-        df["w_id"] = df["w_id"].astype(int)
+        out["w_id"] = out["w_id"].astype(int)
     except Exception:
-        # 允许 'wNN' 形式
-        df["w_id"] = df["w_id"].astype(str).str.extract(r"(\d+)").astype(int)
-    return df[need]
+        out["w_id"] = pd.to_numeric(out["w_id"], errors="coerce").astype("Int64")
+    return out
 
 
 def _standardize_df(df: pd.DataFrame, signal: str) -> pd.DataFrame:
@@ -105,9 +123,7 @@ def main():
     import time
     start_time = time.time()
 
-    index_path = SRC_DIR / "collected_index.csv"
-    idx = _read_index(index_path)  # w_id, meaning
-    meaning_map = dict(zip(idx["w_id"], idx["meaning"]))
+    idx = _read_index(SRC_DIR)  # subject_id, w_id, meaning, w_s, w_e
 
     # 先扫描 rr 文件，目录改为 SRC_DIR / 'rr'
     rr_dir = SRC_DIR / "rr"
@@ -195,6 +211,7 @@ def main():
     n_rsa_skipped_no_resp = 0
     n_missing_rr = 0
     n_read_errors = 0
+    n_skipped_no_index = 0
 
     for sid, wid in tqdm(combos, desc="Computing features", unit="win"):
         rr_df = _load_segment(sid, "rr", wid)
@@ -211,6 +228,14 @@ def main():
                 print(f"[WARN] 需要呼吸段但未找到：{sid}_resp_w{wid}（将跳过 RSA 与个体化HF）")
                 resp_df = None
                 n_rsa_skipped_no_resp += 1
+
+        # per-window metadata from collected_index (meaning, w_s, w_e)
+        meta = idx[(idx["subject_id"] == sid) & (idx["w_id"] == wid)]
+        if meta.empty:
+            print(f"[WARN] 无切窗索引信息，跳过：{sid}_w{wid:02d}")
+            n_skipped_no_index += 1
+            continue
+        meta_row = meta.iloc[0]
 
         feat_parts = []
         if "time" in rr_plan:
@@ -244,7 +269,9 @@ def main():
         row = {
             "subject_id": sid,
             "w_id": wid,
-            "meaning": meaning_map.get(wid, "")
+            "w_s": float(meta_row["w_s"]) if pd.notna(meta_row["w_s"]) else pd.NA,
+            "w_e": float(meta_row["w_e"]) if pd.notna(meta_row["w_e"]) else pd.NA,
+            "meaning": meta_row.get("meaning", "")
         }
         for c in requested_cols:
             if c in feat_df.columns:
@@ -265,6 +292,7 @@ def main():
     print(f"  总窗口数: {len(combos)}")
     print(f"  成功计算窗口数: {n_rows}")
     print(f"  缺少 RR 窗口数: {n_missing_rr}")
+    print(f"  无切窗索引信息跳过数: {n_skipped_no_index}")
     print(f"  时域特征成功数: {n_time}")
     print(f"  频域特征成功数: {n_freq}")
     print(f"  RSA 特征成功数: {n_rsa}")

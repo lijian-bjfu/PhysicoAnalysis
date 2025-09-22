@@ -18,7 +18,8 @@ PARAMS = {
     # 'delete' or 'interp'
     "rr_fix_strategy": "delete",     
     # 切窗长度，标准5分钟
-    "window_sec": 300,               
+    "window_sec": 300,  
+    "min_window": 1,             
     "overlap_sec": 0,
     "valid_rr_ratio_min": 0.80,
     "require_5min_for_freq": True,
@@ -94,6 +95,7 @@ DATASETS = {
             "norm":      "processed/norm/local",       # 2_data_norm 的输出
             "confirmed": "processed/confirmed/local",  # 3_select_rr 最终 RR
             "clean":        "processed/clean/local",   # 检验并清理数据
+            "preview":      "processed/preview/local",
             "windowing": "processed/windowing/local",  # 切窗
             "features":  "processed/features/local",   # 6x 特征输出
             "final":    "processed/final/local",        # 最终的数据表
@@ -134,14 +136,14 @@ DATASETS = {
             # 切窗方法。包括 cover 和 subdivide 两种。cover 重新切窗覆盖之前的数据，subdivide 选择一段数据切窗
             "method": "subdivide", # cover | subdivide
 
+            # 切到哪些信号（不存在则自动跳过）
+            "apply_to": ["rr","resp","acc"],
+
             # 统一默认值（单位一律为秒）
             "defaults": {
                 "win_len_s": PARAMS["window_sec"],                 # 缺省窗长（用于需要窗长的模式）
                 "bound_policy": "trim"                             # 超界时裁剪（不报错）
             },
-
-            # 切到哪些信号（不存在则自动跳过）
-            "apply_to": ["rr","resp","acc"],
 
             # 各模式参数（仅在被选中时读取）
             "modes": {
@@ -154,8 +156,6 @@ DATASETS = {
                         ["stim_end","intervention_start"],
                         ["intervention_start","intervention_end"]
                     ],
-                    # 兼容旧字段名（若下游脚本误读）
-                    "path": "processed/norm/local"
                 },
 
                 # 2) 单段：按绝对时间或锚点切一个段
@@ -171,7 +171,7 @@ DATASETS = {
                 # 4) 事件 + 单段：以事件为锚，局部切一个窗口
                 "events_single": {
                     "events_path": "processed/norm/local",
-                    "anchor_event": None,   # 事件名，来自 EVENTS_CANON；None 则报错
+                    "anchor_event": "stim_start",   # 选此模式，此项必填；None 则报错
                     "offset_s": 0.0,        # 相对锚点的偏移，秒；可为负
                     "win_len_s": None
                 },
@@ -220,6 +220,7 @@ DATASETS = {
             # "n_breaths_used",
             # "rsa_method",
             ],
+        "preview_sids": [] # 选择预览被试id
     },
     "fantasia": {
         "loader": "scripts.loaders.fantasia_loader",
@@ -235,6 +236,7 @@ DATASETS = {
             "norm":      "processed/norm/fantasia",
             "confirmed": "processed/confirmed/fantasia",
             "clean":        "processed/clean/fantasia",   # 检验并清理数据
+            "preview":      "processed/preview/fantasia",
             "windowing": "processed/windowing/fantasia",  # 切窗
             "features":  "processed/features/fantasia",
             "final":    "processed/final/fantasia",        # 最终的数据表
@@ -255,7 +257,7 @@ DATASETS = {
         "windowing":{
             "use": "single_sliding",  # 没有事件，默认滑窗
             "method": "cover", # cover | subdivide
-            "apply_to": ["rr"],
+            "apply_to": ["rr","resp"],
             "defaults": {
                 "win_len_s": PARAMS["window_sec"],
                 "bound_policy": "trim"
@@ -285,8 +287,6 @@ DATASETS = {
             "hf_log_ms2", 
             "lf_ms2", 
             "lf_log_ms2", 
-            # "hf_band_used", 
-            # "hf_center_hz",
             # -- 时域特征
             "mean_hr_bpm",
             "rmssd_ms",
@@ -294,7 +294,11 @@ DATASETS = {
             "pnn50_pct",
             "sd1_ms",
             "sd2_ms",
+            # rsa 特征
+            "rsa_ms",
+            "resp_rate_bpm",
             ],
+        "preview_sids": ["f2y05"] # 选择预览被试id
     }
     # "wesad": {...} 任何开源数据
 }
@@ -349,50 +353,6 @@ EVENTS_CANON = [
   "intervention_end",
   "stop",
 ]
-
-
-# --- 用户过滤配置（支持短号） ---------------------------------
-# 例子：
-# SUBJECTS_FILTER = []                  # 空：处理全部
-# SUBJECTS_FILTER = ["P001S001T001R001"]# 指定完整 sid
-# SUBJECTS_FILTER = ["001","002"]       # 短号：匹配 P001…、P002…
-SUBJECTS_FILTER = []  # 用完记得清空或改
-
-# 限制最多预览多少个（None 表示不限）
-PREVIEW_LIMIT = None
-
-# 根据用户输入的 001,002等识别各类被测的标注id,用于过滤数据
-def sid_filter(all_sids: list[str]) -> list[str]:
-    if not SUBJECTS_FILTER:
-        return sorted(all_sids)
-    keep = []
-    low = [t.strip().lower() for t in SUBJECTS_FILTER if t and t.strip()]
-    for sid in sorted(all_sids):
-        sid_low = sid.lower()
-        for t in low:
-            # 短号：纯数字 → 匹配 "P{###}"
-            if t.isdigit():
-                tt = f"p{int(t):03d}"
-                if tt in sid_low:
-                    keep.append(sid); break
-            # 直接包含：支持你写 f1y01 / P001… 等
-            elif t in sid_low:
-                keep.append(sid); break
-    # 去重保持顺序
-    seen = set(); out = []
-    for s in keep:
-        if s not in seen:
-            seen.add(s); out.append(s)
-
-    if PREVIEW_LIMIT is not None:
-        out = out[:int(PREVIEW_LIMIT)]
-    
-    if not out:
-        print(f"[info] 发现 {len(all_sids)} 个被试，但过滤后为 0。检查 SUBJECTS_FILTER={SUBJECTS_FILTER}")
-        
-    print(f"[select] 总计发现 {len(all_sids)} 个；将处理 {len(out)} 个 → {out}")
-
-    return out
 
 # ---------------------------------------------------------------
 

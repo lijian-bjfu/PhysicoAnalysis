@@ -14,7 +14,7 @@ for _ in range(6):
         break
     _p = _p.parent
 # --------------------------------------------------------
-from settings import DATASETS, ACTIVE_DATA, DATA_DIR, SUBJECTS_FILTER, sid_filter
+from settings import DATASETS, ACTIVE_DATA, DATA_DIR
 
 DS = DATASETS[ACTIVE_DATA]
 paths = DS["paths"]
@@ -22,6 +22,8 @@ SRC_ROOT = (DATA_DIR / paths["windowing"]).resolve()                 # e.g. data
 OUT_ROOT = (SRC_ROOT / "collected").resolve()                        # e.g. .../windowing/local/collected
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
 APPLY_TO: List[str] = DS.get("windowing", {}).get("apply_to", ["rr"])
+
+PRE_SID = DATASETS[ACTIVE_DATA]["preview_sids"]
 
 # ----------------- helpers -----------------
 def _fmt_hms(sec: float) -> str:
@@ -181,6 +183,32 @@ def _copy_visible_files(visible: pd.DataFrame, out_root: Path, src_root: Path, a
                 })
     return pd.DataFrame.from_records(recs)
 
+# ----------------- window-axis helper -----------------
+def _attach_window_axis(df: pd.DataFrame) -> pd.DataFrame:
+    """Add window-axis columns w_s and w_e per subject.
+    Rules:
+      - Anchor per subject at earliest t_start_s among FINAL visible windows.
+      - w_s = round(t_start_s - t0, 2)
+      - w_e = round(w_s + round(t_end_s - t_start_s, 2), 2)
+      - Unit is seconds; keep 2 decimals. Snap tiny -0.00 to +0.00.
+    """
+    res = df.copy()
+    # ensure numeric
+    res["t_start_s"] = pd.to_numeric(res["t_start_s"], errors="coerce")
+    res["t_end_s"] = pd.to_numeric(res["t_end_s"], errors="coerce")
+    # per-subject anchor
+    t0 = res.groupby("subject_id")["t_start_s"].transform("min")
+    # compute w_s, snap near-zero to 0.00 to avoid -0.00 artifacts
+    w_s = np.round(res["t_start_s"] - t0, 2)
+    w_s = np.where(np.abs(w_s) < 5e-3, 0.0, w_s)
+    # use rounded duration to keep (w_e - w_s) numerically consistent with CSV rounded values
+    w_len = np.round(res["t_end_s"] - res["t_start_s"], 2)
+    w_e = np.round(w_s + w_len, 2)
+    # assign with stable float dtype
+    res["w_s"] = w_s.astype(float)
+    res["w_e"] = w_e.astype(float)
+    return res
+
 # ----------------- main -----------------
 def main():
     OUT_ROOT.mkdir(parents=True, exist_ok=True)
@@ -201,7 +229,9 @@ def main():
 
     # 2) subject 选择
     all_subjects = sorted(idx_all["subject_id"].unique().tolist())
-    subjects = sid_filter(all_subjects)
+
+    # 选择所有被试，若想预览一下，用 PRE_SID
+    subjects = all_subjects
     print(f"[select] 被试总数 {len(all_subjects)}，将处理 {len(subjects)} → {subjects}")
 
     # 3) 计算可见叶子窗 + 最终顺序
@@ -237,6 +267,10 @@ def main():
         "t_start_s", "t_end_s", "duration_s",
         "meaning", "lineage_path", "src_level_dir"
     ]].copy()
+
+    # attach window-axis (w_s, w_e) per subject, 2-decimal seconds anchored at the first final window
+    collected_index = _attach_window_axis(collected_index)
+
     collected_index.sort_values(["subject_id", "final_order"], inplace=True)
     out_index = OUT_ROOT / "collected_index.csv"
     collected_index.to_csv(out_index, index=False)
@@ -272,6 +306,7 @@ def main():
         f.write("  2) rename_map.csv 记录了每个文件从源路径到目标路径的映射，便于追溯。\n")
         f.write("  3) collected_index.csv 保存了每个最终窗的元数据（level, w_id, parent_level, parent_w_id, lineage_path 等）。\n")
         f.write("  4) lineage/parent 语义：若某窗在更高层被细分，则其为父窗，不会进入最终集合；叶窗为最终参与分析的单位。\n")
+        f.write("  5) 新增时间轴列：w_s、w_e。以每位被试的首个最终窗口起点为原点(0)，单位为秒，保留2位小数；如果真实数据早于此原点，则对应对齐时可出现负值。\n")
         f.write("\n说明：\n")
         f.write("  本日志仅记录流程与汇总信息，不逐一罗列各被试窗口明细，以避免冗余。\n")
         f.write("  若需查看某被试的最终窗口，请查阅 collected_index.csv 并配合 rename_map.csv。\n")

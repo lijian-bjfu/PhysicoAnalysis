@@ -17,7 +17,7 @@ for _ in range(6):
         break
     _p = _p.parent
 # --------------------------------------------------------
-from settings import DATASETS, ACTIVE_DATA, DATA_DIR, SUBJECTS_FILTER, sid_filter, SCHEMA
+from settings import DATASETS, ACTIVE_DATA, DATA_DIR, SCHEMA, PARAMS
 
 try:
     from tqdm import tqdm
@@ -112,8 +112,10 @@ def _resolve_cfg():
     SRC_OTHER_DIR = (DATA_DIR / paths["norm"]).resolve()
     OUT_BASE      = (DATA_DIR / paths["windowing"]).resolve()
 
-    method  = (os.getenv("WINDOWING_METHOD") or wcfg.get("method", "cover")).lower().strip()  # cover | subdivide
-    preview = str(os.getenv("WINDOWING_PREVIEW", wcfg.get("preview", "true"))).lower() in ("1","true","yes")
+    method  = wcfg.get("method", "cover").lower().strip()  # cover | subdivide
+    preview_sids = ds.get("preview_sids", [])
+    if not isinstance(preview_sids, (list, tuple)):
+        preview_sids = []
 
     use_mode = wcfg.get("use", "events").strip()
     apply_to = wcfg.get("apply_to", ["rr"])  # e.g. ["rr","resp","acc","events"]
@@ -124,7 +126,7 @@ def _resolve_cfg():
         "use_mode": use_mode,
         "apply_to": apply_to,
         "method": method,
-        "preview": preview
+        "preview_sids": preview_sids
     }
 
 # 当用户将结尾的值设为特别大的时候，比如999999专这样的数，直接取结尾。
@@ -139,8 +141,7 @@ def _rr_bounds(sid: str, cfg: dict) -> tuple[float, float]:
 # 被试列表（以 confirmed 下 *_rr.* 为准）
 
 def list_subjects(src_rr_dir: Path) -> list[str]:
-    sids = sorted({p.stem.split("_")[0] for p in list(src_rr_dir.glob("*_rr.*"))})
-    return sid_filter(sids)
+    return sorted({p.stem.split("_")[0] for p in src_rr_dir.glob("*_rr.*")})
 
 # 事件读取（prefer_dir 可覆盖事件查找路径，用于按父层同目录读取）
 
@@ -213,9 +214,17 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
     label_tpl = wcfg.get("labeling", {}).get(mode, "{s:.1f}-{e:.1f}")
     windows: list[dict] = []
 
+    # 统一最小时长（秒），由 settings.PARAMS.min_window 配置，默认 1.0s
+    min_win = PARAMS["min_window"]
     def add_win(s: float, e: float, meaning: str):
-        if s is None or e is None: return
-        if e <= s: return
+        if s is None or e is None:
+            return
+        if e <= s:
+            print(f"[warn] {sid}: 反序/零长度窗口被拦截 s={s}, e={e}, meaning={meaning}")
+            return
+        if (e - s) < min_win:
+            print(f"[warn] {sid}: 窗口小于最小时长 {min_win}s 被拦截 s={s}, e={e}, meaning={meaning}")
+            return
         windows.append({
             "subject_id": sid,
             "t_start_s": float(s),
@@ -228,14 +237,8 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
     def load_events() -> pd.DataFrame | None:
         m = wcfg["modes"].get("events", {})
         events_dir = (DATA_DIR / m.get("events_path", "")).resolve()
-        ev_file = (events_dir / f"{sid}_events.csv")
-        df = read_table_if_exists(ev_file)
-        if df is None:
-            ev_file = (events_dir / f"{sid}_events.parquet")
-            df = read_table_if_exists(ev_file)
-        if df is None: return None
-        df = df.rename(columns={SCHEMA["events"]["t"]:"time_s", SCHEMA["events"]["label"]:"events"})
-        return df.dropna(subset=["time_s","events"]).sort_values("time_s")
+        # 统一走全局 helper，确保与预览读取一致。
+        return load_events_for_sid(cfg, sid, prefer_dir=events_dir)
 
     if mode == "events":
         pairs = wcfg["modes"]["events"].get("pairs", [])
@@ -247,17 +250,24 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
             if e0 in ev_map and e1 in ev_map:
                 s, e = ev_map[e0], ev_map[e1]
                 add_win(s, e, label_tpl.format(e0=e0, e1=e1, s=s, e=e))
+
     elif mode == "single":
         m = wcfg["modes"]["single"]
         s = m.get("start_s"); e = m.get("end_s"); w = m.get("win_len_s"); a = m.get("anchor_time_s")
+        # 结尾设定时间锁定到实际数据时间，min(exp, real)
+        tmin, tmax = _rr_bounds(sid, cfg)
         if s is not None and e is not None:
-            add_win(s, e, label_tpl.format(s=s, e=e))
+            s1, e1 = max(float(s), tmin), min(float(e), tmax)
+            add_win(s1, e1, label_tpl.format(s=s1, e=e1))
         elif s is not None and w is not None:
-            add_win(s, s+w, label_tpl.format(s=s, e=s+w))
+            s1, e1 = max(float(s), tmin), min(float(s)+float(w), tmax)
+            add_win(s1, e1, label_tpl.format(s=s1, e=e1))
         elif a is not None and w is not None:
-            add_win(a, a+w, label_tpl.format(s=a, e=a+w))
+            s1, e1 = max(float(s), tmin), min(float(s)+float(w), tmax)
+            add_win(s1, e1, label_tpl.format(s=s1, e=e1))
         else:
             raise SystemExit("[error] single 模式参数不足（需 [start,end] 或 [start,win] 或 [anchor,win]）")
+
     elif mode in ("sliding","slid"):
         m = wcfg["modes"]["sliding"] if mode=="sliding" else wcfg["modes"]["slid"]
         win_len = m.get("win_len_s") or m.get("win_len")
@@ -282,20 +292,34 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
             print(f"[warn] {sid}: 有效区间不足一个窗（{fmt_s(s0)}~{fmt_s(e0)}，win={win_len}s），本被试无窗口。")
         else:
             step = _compute_step(float(win_len), gap)
+            approx_n = int(max(0, (float(e0) - float(s0) - float(win_len)) / step))
+            if step < 0.01 * float(win_len) or approx_n > 10000:
+                print(f"[warn] {sid}: 步长过小或窗口数过多 step={step:.6f}, win={float(win_len):.6f}, 预计窗口数≈{approx_n}")         
             t = float(s0)
             while t + float(win_len) <= float(e0) + 1e-9:
-                add_win(t, t+float(win_len), label_tpl.format(s=s0, e=e0, w=win_len))
+                s_cur, e_cur = t, t + float(win_len)
+                add_win(s_cur, e_cur, label_tpl.format(s=s_cur, e=e_cur))
                 t += step
+
     elif mode == "events_single":
         m = wcfg["modes"]["events_single"]
         ev = load_events()
-        if ev is None: raise SystemExit("[error] events_single 需要事件文件")
+        #拿到 events.csv
+        events_dir = (DATA_DIR / wcfg["modes"].get("events", {}).get("events_path", "")).resolve()
+        if ev is None:
+            raise SystemExit(f"[error] events_single 模式需要事件表，但在 {events_dir} 未找到 {sid}_events.csv 或 .parquet")
+        
+        # 来自事件列表，去settings 填写。不可以为 None
         anchor = m.get("anchor_event", None)
         off = float(m.get("offset_s", 0.0) or 0.0)
         w = m.get("win_len_s", None)
-        if not anchor or w is None: raise SystemExit("[error] events_single 缺少 anchor_event 或 win_len_s")
+
+        if not anchor or w is None: 
+            raise SystemExit("[error] events_single 缺少 anchor_event 或 win_len_s")
+
         t_anchor = float(ev.loc[ev["events"]==anchor, "time_s"].min())
         add_win(t_anchor + off, t_anchor + off + w, label_tpl.format(anchor=anchor, off=off, w=w))
+
     elif mode == "events_sliding":
         m = wcfg["modes"]["events_sliding"]
         ev = load_events()
@@ -322,10 +346,15 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
             print(f"[warn] {sid}: 事件区间不足一个窗（{fmt_s(s0)}~{fmt_s(e0)}，win={w}s），本被试无窗口。")
         else:
             step = _compute_step(float(w), gap)
+            approx_n = int(max(0, (float(e0) - float(s0) - float(w)) / step))
+            if step < 0.01 * float(w) or approx_n > 10000:
+                print(f"[warn] {sid}: 步长过小或窗口数过多 step={step:.6f}, win={float(w):.6f}, 预计窗口数≈{approx_n}")
             t = float(s0)
             while t + float(w) <= float(e0) + 1e-9:
-                add_win(t, t+float(w), label_tpl.format(seg0=seg[0], seg1=seg[1], w=w, step=step))
+                s_cur, e_cur = t, t + float(w)
+                add_win(s_cur, e_cur, label_tpl.format(s=s_cur, e=e_cur))
                 t += step
+
     elif mode == "single_sliding":
         m = wcfg["modes"]["single_sliding"]
         w = m.get("win_len_s")
@@ -416,8 +445,11 @@ def build_windows_subdivide(cfg: dict) -> tuple[list[dict], Path, int, int]:
             anchor = (s0 + e0)/2.0 if m.get("anchor_time_s") is None else float(m.get("anchor_time_s"))
             s = max(s0, anchor)
             e = min(e0, s + w) if w else e0
-            if e - s >= 1.0:
+            min_win = PARAMS["min_window"]
+            if (e - s) >= min_win:
                 add_child(s, e, f"parent[w{parent_w_id:02d}] -> single[{fmt_s(s)},{fmt_s(e)}]")
+            else:
+                print(f"[warn] {sid}: 细分single窗口小于最小时长 {min_win}s 被拦截 s={s}, e={e}")
         else:
             # 细分不直接允许 events 再切（避免跨层事件偏差）
             pass
@@ -459,11 +491,14 @@ def _save_windows_for_subject(sid: str, cfg: dict, windows_df: pd.DataFrame, out
             print(f"[skip] {sid} {signal}: 未找到或为空，跳过。")
             continue
         n_saved = 0
+        missing_ids = []
         for r in windows_df.itertuples(index=False):
             s, e = float(r.t_start_s), float(r.t_end_s)
             w_id = int(r.w_id)
             sub = df_sig[(df_sig[tcol] >= s) & (df_sig[tcol] < e)].copy()
             if sub.empty:
+                print(f"[warn] {sid} {signal}: w{w_id:02d} 窗口无数据 [{s}, {e})，可能因数据缺失或时间不覆盖")
+                missing_ids.append(w_id)
                 continue
             sub["w_id"] = w_id
             sub["level"] = int(level)
@@ -472,6 +507,10 @@ def _save_windows_for_subject(sid: str, cfg: dict, windows_df: pd.DataFrame, out
             out_path = out_dir / f"{sid}_{signal}_w{w_id:02d}.csv"
             sub.to_csv(out_path, index=False)
             n_saved += 1
+        expect = len(windows_df)
+        if n_saved < expect:
+            miss_str = ",".join([f"w{int(x):02d}" for x in missing_ids]) if missing_ids else ""
+            print(f"[warn] {sid} {signal}: 实际保存 {n_saved}/{expect}，缺失窗口：{miss_str}")
         saved_counts[signal] = n_saved
         print(f"[save] {sid} {signal}: {n_saved} 个窗口 → {out_dir}")
     return saved_counts
@@ -481,6 +520,11 @@ def _save_windows_for_subject(sid: str, cfg: dict, windows_df: pd.DataFrame, out
 def main():
     cfg = _resolve_cfg()
     paths = cfg["paths"]
+
+    # 预览目标：仅绘制 DATASETS[ACTIVE_DATA]['preview_sids'][0]；未配置则不预览
+    wcfg = cfg["wcfg"]
+    prev_list = cfg.get("preview_sids", [])
+    preview_target = prev_list[0] if isinstance(prev_list, (list, tuple)) and len(prev_list) > 0 else None
 
     # 输出目录与当前层级 level
     if cfg["method"] == "subdivide":
@@ -500,6 +544,7 @@ def main():
     print(f"[apply_to] {cfg['apply_to']}")
     if cfg["use_mode"] in ("sliding","slid","events_sliding","single_sliding"):
         print("[note] 新语义：stride_s 表示相邻窗口之间的“间隔”（秒）。负值表示重叠，0 表示紧贴，正值表示留白。")
+        print("[note] 保存阶段采用半开区间 [s,e)，用于避免相邻窗口边界的双重计数。")
 
     sids = list_subjects(paths["rr"])
     if not sids:
@@ -523,7 +568,7 @@ def main():
             if wins:
                 times = ", ".join([f"[{fmt_s(w['t_start_s'])} ~ {fmt_s(w['t_end_s'])}]" for w in wins])
                 print(f"[{sid}] windows: {len(wins)} → {times}")
-                if cfg["preview"] and (not preview_done):
+                if (not preview_done) and (preview_target is not None) and (sid == preview_target):
                     draw_preview(sid, cfg, wins, OUT_DIR)
                     preview_done = True
             all_windows.extend(wins)
@@ -540,7 +585,7 @@ def main():
             s = [w for w in wins if w["subject_id"]==sid]
             times = ", ".join([f"[{fmt_s(x['t_start_s'])} ~ {fmt_s(x['t_end_s'])}]" for x in s])
             print(f"[{sid}] windows (subdivide from L{parent_level} w{parent_w_id:02d}): {len(s)} → {times}")
-            if cfg["preview"] and s and (not preview_done):
+            if s and (not preview_done) and (preview_target is not None) and (sid == preview_target):
                 draw_preview(sid, cfg, s, OUT_DIR)
                 preview_done = True
         all_windows = wins
