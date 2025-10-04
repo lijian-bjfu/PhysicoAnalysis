@@ -152,13 +152,13 @@ def map_to_standard(sig: str, df: pd.DataFrame, options: Optional[dict] = None) 
 
         base = {t_key: _as_seconds(dfl[time])}
 
-        if not (vx and vy and vz):
-            cands = [c for c in dfl.columns if c != time][:3]
-            if len(cands) == 3:
-                vx, vy, vz = cands
-            if vx: base[vx_key] = pd.to_numeric(dfl[vx], errors="coerce")
-            if vy: base[vy_key] = pd.to_numeric(dfl[vy], errors="coerce")
-            if vz: base[vz_key] = pd.to_numeric(dfl[vz], errors="coerce")
+        if vx and vy and vz:
+            # 找到标准列名时，直接写入三轴
+            base[vx_key] = pd.to_numeric(dfl[vx], errors="coerce")
+            base[vy_key] = pd.to_numeric(dfl[vy], errors="coerce")
+            base[vz_key] = pd.to_numeric(dfl[vz], errors="coerce")
+        else:
+            print(f"Warning: ACC 数据未找到标准列名 {vx}, {vy}, {vz}，使用检查数据")
 
         out = pd.DataFrame(base).dropna()
         if "fs_hz" in dfl.columns:
@@ -172,7 +172,7 @@ def map_to_standard(sig: str, df: pd.DataFrame, options: Optional[dict] = None) 
         t_key = SCHEMA["events"]["t"]
         label_key = SCHEMA["events"]["label"]
         out = pd.DataFrame({
-            t_key: _as_seconds(dfl[time]),
+            t_key: dfl[time],
             label_key: dfl[value]
         }).dropna()
         return out

@@ -1,0 +1,64 @@
+# 使用方法
+## 项目设置
+
+操作方法：编辑 `settings.py`
+
+该脚本为全局配置。包含项目路径管理（PROJECT_ROOT）、数据集配置（DATASETS / ACTIVE_DATA）、全局性的数据清理、切窗与特征提取参数（PARAMS）、信号别名规范（ SIGNAL_ALIASES / DEVICE_TAGS）、数据定义规范（ SCHEMA ）、事件标注规范(EVENTS_CANON),以及输出数据长表中包含的信息（FINAL_LABELS）
+
+## 载入数据
+
+操作方法：运行 `1_load_data.py`
+
+数据集信息在 settings 的 DATASETS 中设置。ACTIVE_DATA 指定使用的数据集。`local` 为使用者自己录制的数据默认名称，还可添加其他测试数据。
+
+settings.DATASETS 中与载入数据相关的 key:
+- `loader`：每个数据集都需要专门写一个数据调用代码，负责该数据集的调用，代码放在`scripts\loaders\`下，`loader`的值为该脚本的路径。`1_load_data.py`会根据此路径调用相应的脚本执行数据载入工作
+- `paths`：不同数据处理阶段数据保存路径
+
+local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文件名类似于 `sub-P002_ses-S001_task-Default_run-001_all_rr_h10`，为被试号+测试号+任务标签+试次号的关键词组合。将所有数据放在同一个文件夹中，运行 `1_load_data.py`，程序会打开系统文件夹，要求用户指定数据所在文件夹。指定文件夹后，程序将数据载入本项目目录，目录可在 `paths` 中设置。载入后，文件名会做一些简化处理，如 `P002S001T001R001_rr`。
+
+载入数据默认保存在 `data/raw/ACTIVE_DATA`路径下。
+
+注：事件数据名会从 markers 重命名为 events
+
+## 数据规范化
+
+操作方法：`2_data_norm.py`
+
+该操作的目的是统一信号及属性的定义名称。该规范定义在settings.SIGNAL_ALIASES、settings.SCHEMA 中。未来数据保存时对不同的信号属性进行命名时均遵循此规范。数据规范包含三个部分：对数据命名的规范，包括被试号与信号类型、统一信号的属性名、基于规范筛查数据。
+
+规范化的数据默认保存在 `data/processed/norm/ACTIVE_DATA`路径下。acc, ecg, resp等定义为连续数据，保存为parquet文件，在该目录下的preview文件夹提供对parquet的csv预览文件。hr, rr, events保存为csv文件。
+
+## 确定RR数据
+
+操作方法：`3_select_rr.py`。需要运行两次，第一次使用者需要确定使用哪个RR数据，第二次生成最终“确认RR数据”。
+
+该脚本的目的是从现有数据中获取质量最佳的RR数据。其中“选择”在于最终确认的RR是来自设备提供的RR数据，还是通过ECG转换后的RR数据。运行时，脚本会在 SRC_NORM_DIR 中扫 *_rr.csv 与 *_ecg.*文件。如果存在 *_rr.csv，就进入“双源比较”流程，即在两个数据源中选择最佳RR，否则直接从ECG生成RR。
+
+选择的思路是首先计算两路 RR 的重叠区间，如果重叠区间太短（小于10秒）则警告退出。否则将两路RR映射为 1 Hz 心率轨用于对比与绘图。绘图的范围基于顶部全局变量 PLOT_RANGE_MODE，'auto' 模式下，如果存在 events，优先使用 events 的最小到最大时间作为横轴范围。
+
+第一步会在 `data/processed/rr_select/` 路径下生成 decision_suggested.csv 数据对比表格，其中给出多项评估哪个RR更好的指标。在`choice_suggested.csv`列下给出建议确认的RR (ecg_rr / device_rr),使用者可手动修改此列，同时 **将该表从 decision_suggested.csv 修改为 decision.csv 确认最终选择决定**。
+
+第二步是生成确认数据,如果 `decision.csv` 已经存在，则会根据该决定表中各个被试的 `choice_suggested`列中的值生成最终确定的RR数据。数据保存在`/data/processed/confirmed/` 路径，同时在 `/data/processed/rr_select/ ACTIVE_DATA/` 路径生成 final_rr_summary.csv 报告生成文件的名字和选择rr的策略。
+
+此步骤还会生成RR数据预览图。根据 settings.DATASET[ACTIVE_DATA]["preview_sids"] 列表中的用户ID绘制。如果列表为空，则只绘制第一个被试的结果。
+
+## 绘图查看
+
+操作方法：`4a_preview.py`
+
+该脚本绘制上一步“确定选择RR”的预览图。用于快速检查RR是否存在问题。预览图根据 settings.DATASET[ACTIVE_DATA]["preview_sids"] 列表中的用户ID绘制。根据 settings.DATASET[ACTIVE_DATA]["windowing"]["apply_to"] 列表中的信号类型绘制信号数据，前提是对应的数据必须在 confirmed/文件夹下有一份拷贝。
+
+## 清理 RR 
+
+操作方法：`4b_clean_rr.py`
+
+该脚本用于处理rr数据中的异常尖峰。操作的数据对象为 confirmed rr。执行该脚本前必须先执行 `3_select_rr.py`，并且在rr_select/路径下有decision.csv文件。`4b_clean_rr.py`会根据该文件中标注为来自 device_rr 的数据进行分析。分析后会给出一份汇总报告 `clean_rr_summary.csv`, 标注对哪些被试的 RR 数据进行处理。n_segments 表示在该被试 RR 中识别到的“短时尖峰短段”的数量。n_corrected 表示需处理的搏点个数之和。ratio_corrected 表示n_corrected / 全部 RR 点数 的比例。warning 当数据糟糕到一定程度会提醒，例如异常短段数达到提醒阈值（默认 4）或需修正搏点占比达到提醒阈值（默认 0.05）
+
+处理后的 RR 会覆盖之前的confirmed rr。
+
+## 切窗
+
+操作方法：`5a_windowing.py`
+
+- `windowing`：切窗设置。首要的两个设置为`use`和`method`。`use`设置切窗策略，可选策略包括根据事件信息切窗、切单窗、滑窗、事件+单窗、事件+滑窗、单窗+滑窗，(events / single / sliding / events_single / events_sliding / single_sliding) 共6种。`method`设置切窗方法，包括全切与细分2种（cover / subdivide）。全切不考虑切窗历史，细分则考虑上一次切窗历史，对上一次切窗结果中的某一部分进行再次切窗。

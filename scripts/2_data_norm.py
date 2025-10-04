@@ -93,6 +93,7 @@ def _save_standard(std: pd.DataFrame,
         final_sig = sig_low
         out_df = to_events(std)
         out_path = out_dir / f"{sid}_{final_sig}.csv"
+        out_df.to_csv(out_path, index=False)
         prev_cols = [SCHEMA["events"]["t"], SCHEMA["events"]["label"]]
         prev_cols = ["time_s", "events"]
     else:
@@ -137,12 +138,8 @@ def main():
     for i, path in enumerate(sorted(files), 1):
         # 只靠文件名识别信号；events 在此就跳过
         sig = detect_signal(path.name, SIGNAL_ALIASES)
-
         # print(f"[list sig] current sig is {sig}")
         
-        # if sig == "events":
-        #     if VERBOSE: print(f"[skip] 跳过 events：{path.name}")
-        #     continue
         if not sig:
             if VERBOSE: print(f"[skip] 无法识别信号类型：{path.name}")
             continue

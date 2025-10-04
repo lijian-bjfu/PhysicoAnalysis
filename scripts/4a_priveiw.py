@@ -26,9 +26,9 @@ PRE_SIG: List = DS["windowing"]["apply_to"] # 选择列表中的所有信号
 FILE_TYPES = ["csv", "parquet"]
 
 # 不按照系统设定，临时检查文件
-SRC_DIR = (DATA_DIR / paths["confirmed"])
-PRE_SID = ["f1y05"]
-PRE_SIG = ["rr"]
+# SRC_DIR = (DATA_DIR / paths["confirmed"])
+# PRE_SID = ["f1y05"]
+# PRE_SIG = ["rr"]
 
 # Use SCHEMA-defined canonical column names first, then fallback heuristics
 def _get_time_col(df: pd.DataFrame, signal: str) -> Optional[str]:

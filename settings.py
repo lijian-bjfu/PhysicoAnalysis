@@ -1,14 +1,15 @@
 # 需要安装依赖：pip install wfdb pandas numpy scipy neurokit2 matplotlib
 
 from pathlib import Path
-# 数据源开关
-DATA_SOURCE = "fantasia"   # "local" or "fantasia"
+
+# 指定数据集
+ACTIVE_DATA = "local"
 
 # 数据根
 PROJECT_ROOT  = Path(__file__).parent
 DATA_DIR      = PROJECT_ROOT / "data"
 PROCESSED_DIR = DATA_DIR / "processed"
-RAW_CACHE_DIR = DATA_DIR / "raw" / ("fantasia" if DATA_SOURCE=="fantasia" else "local")
+RAW_CACHE_DIR = DATA_DIR / "raw" / ACTIVE_DATA
 
 # 全局参数，包括清理、切窗、特征提取等数据处理需要的参数
 PARAMS = {
@@ -78,9 +79,6 @@ PARAMS = {
     
 }
 
-# 指定数据集
-ACTIVE_DATA = "fantasia"
-
 DATASETS = {
     "local": {
         "loader": "scripts.loaders.local_loader",   # 只负责“归位”
@@ -93,6 +91,7 @@ DATASETS = {
             "raw":       "raw/local",                  # 归位后的原始（或导入）文件
             "groups":   "groups/local",                 # 分组信息
             "norm":      "processed/norm/local",       # 2_data_norm 的输出
+            "rr_select": "processed/rr_select/local",  # 3_select_rr 的判断表位置
             "confirmed": "processed/confirmed/local",  # 3_select_rr 最终 RR
             "clean":        "processed/clean/local",   # 检验并清理数据
             "preview":      "processed/preview/local",
@@ -220,7 +219,7 @@ DATASETS = {
             # "n_breaths_used",
             # "rsa_method",
             ],
-        "preview_sids": [] # 选择预览被试id
+        "preview_sids": ["P002S001T001R001"] # 选择预览被试id
     },
     "fantasia": {
         "loader": "scripts.loaders.fantasia_loader",
@@ -352,6 +351,7 @@ EVENTS_CANON = [
   "intervention_start",
   "intervention_end",
   "stop",
+  "custom_event",
 ]
 
 # ---------------------------------------------------------------
@@ -377,46 +377,6 @@ RR_SCORE = {
     "w_bias": 0.20,   # 系统性偏差（绝对 Bias）
 }
 
-# 原始数据快查表 2qc_rr_<sid>*.csv
-QC_RR_LABELS = {
-    "t_s": "RR 对应的时间戳（秒，ECG 时间轴）",
-    "rr_ms": "心搏间期（毫秒）",
-    "hr_bpm": "由 rr_ms 换算的心率（次/分）",
-    "valid": "该 RR 是否被判为有效（布尔）；等于 not flagged",
-    "flagged": "点级规则命中（布尔）；相邻 RR 相对变化超阈值或心率越界即为 True",
-    "flag_delta": "相邻 RR 相对变化是否超过阈值 rr_artifact_threshold（布尔）",
-    "flag_hr": "心率是否越过 hr_min_max_bpm 范围（布尔）",
-    "flag_reason": "命中规则的摘要：'delta'、'hr' 或 'delta|hr'；未命中为空字符串",
-    "quality_check": "快速质检用的宽口径可疑标记（布尔）；推荐定义为 flagged 或位于建议排查区间内",
-    "n_rr_corrections": "从序列开始累计到当前点，被判为可疑/需修正的 RR 个数（仅计数，未实际改动）"
-}
-
-# 清洗后单被试 RR 表（2clean_<sid>.csv / .parquet）
-RR_CLEAN_LABELS = {
-    "t_s": "本次心搏的对齐时间（秒，基于原始ECG时间轴中R峰的第二个及以后峰值）",
-    "rr_ms": "相邻心搏间期（毫秒），应用修正策略后的最终数值（delete不改值、interp为插值）",
-    "hr_bpm": "由 rr_ms 换算的心率（每分钟心跳数），等于 60000 / rr_ms",
-    "valid": "是否用于下游分析的有效标记；在 delete 策略下等于非伪迹，在 interp 策略下一律为 True",
-    "flagged": "是否被任何伪迹规则标记（True/False），仅用于透明化，不等同于是否纳入分析",
-    "flag_delta": "是否因“相邻RR相对变化超过阈值”被标记（True/False），阈值见 PARAMS['rr_artifact_threshold']",
-    "flag_hr": "是否因“心率越界”被标记（True/False），上下界见 PARAMS['hr_min_max_bpm']",
-    "flag_reason": "伪迹原因字符串：'delta'、'hr'、'delta|hr' 或空字符串",
-    "n_rr_corrections": "从序列开始累计被标记次数的计数（单调递增），用于快速定位伪迹密集区"
-}
-
-# 清洗汇总表（2clean_summary.csv）
-RR_CLEAN_SUMMARY_LABELS = {
-    "subject_id": "被试编号（与原始记录名一致）",
-    "n_rr": "该被试的RR条目总数（心搏对数）",
-    "n_flagged": "被伪迹规则标记的RR条目数（flagged为True的计数）",
-    "pct_flagged": "被标记条目的百分比（100 * n_flagged / n_rr，保留两位小数）",
-    "n_flag_delta": "因delta规则（相邻RR相对变动超阈）被标记的条目数",
-    "n_flag_hr": "因hr规则（心率越界）被标记的条目数",
-    "n_valid": "最终用于分析的RR条目数（delete：n_rr - n_flagged；interp：等于n_rr）",
-    "pct_valid": "有效RR占比（100 * n_valid / n_rr）",
-    "strategy": "采用的修正策略（'delete' 删除伪迹行；'interp' 插值覆盖伪迹行）"
-}
-
 # RR 伪迹人工复查表（data/processed/review/rr_flags_<sid>.csv）
 RR_REVIEW_LABELS = {
     "t_s": "心搏时间戳（秒），与清洗后RR表可一一对齐",
@@ -431,46 +391,23 @@ RR_REVIEW_LABELS = {
     "rr_ms_override": "人工给出的RR替代值（毫秒，正数才生效），用于手动修正异常RR"
 }
 
-# 建议伪迹清楚表
-QC_SUGGEST_LABELS = {
-    "subject_id": "被试编号，与 2clean_<sid>.csv 对应",
-    "t_start_s": "建议剪除片段起点（秒，ECG 时间轴）",
-    "t_end_s": "建议剪除片段终点（秒，ECG 时间轴）",
-    "reason": "建议原因标签的并集（low_valid/high_flag/hr_jump/too_few_rr 等）"
-}
-
-# 可调质检参数默认值
-QC_PARAMS = {
-    "qc_window_s": 30.0,        # 质检滑窗长度（秒）
-    "qc_stride_s": 10.0,        # 质检滑窗步长（秒）
-    "qc_min_rr_per_win": 20,    # 每窗最少 RR 数
-    "qc_min_valid_ratio": 0.85, # 有效 RR 比例阈值（低于此为差）
-    "qc_max_flagged_ratio": 0.20,# 被标记 RR 比例阈值（高于此为差）
-    "qc_hr_jump_bpm": 25.0,     # 相邻窗 HR 均值跳变阈值（bpm）
-    "qc_merge_gap_s": 5.0,      # 建议片段间隙合并阈值（秒）
-    "qc_min_cut_s": 3.0,        # 最短建议片段长度（秒）
-}
-
-# 输出列说明
-OUTPUT_LABELS = {
+# final.csv 输出列说明
+FINAL_LABELS = {
     "subject_id": "被试唯一标识（字符串，例如 'sub-0001'）",
-    "age_group": "年龄组（young / old / unknown）",
-    "window_id": "时间窗口编号（如 'win-001' 或 'T2b'）",
-    "window_start_s": "窗口起始时间（秒，记录起点=0）",
-    "window_dur_s": "窗口时长（秒；5分钟=300）",
-    "valid_rr_ratio": "有效RR占比（0–1；≥0.80 推荐有效）",
-    "n_rr_corrections": "RR校正次数（删除/插值的心搏数量）",
-    "window_valid": "窗口有效标记（布尔）",
-    "resp_rate_bpm": "呼吸频率（次/分；缺失则留空）",
-    "hf_band_used": "HF频带类型（fixed/individual）",
-    "hf_center_hz": "个体化HF中心频率（Hz）",
+    "w_id": "窗口编号/序号",
+    "w_s": "窗口开始时间，基于绝对值，第一个窗口开始时间为0",
+    "w_e": "窗口开始时间，基于绝对值",
+    "hf_log_ms2": "HF功率自然对数 ln(ms²)",
+    "lf_log_ms2": "LF功率自然对数 ln(ms²)",
     "mean_hr_bpm": "平均心率（次/分）",
     "rmssd_ms": "RMSSD（毫秒）",
     "sdnn_ms": "SDNN（毫秒）",
     "pnn50_pct": "pNN50（百分比）",
     "sd1_ms": "SD1（毫秒）",
     "sd2_ms": "SD2（毫秒）",
-    "hf_log_ms2": "HF功率自然对数 ln(ms²)",
-    "lf_log_ms2": "LF功率自然对数 ln(ms²)",
     "rsa_ms": "RSA（毫秒；可缺）",
+    "resp_rate_bpm": "呼吸频率（次/分；缺失则留空）",
+    "rr_valid_ratio": "有效RR占比（0–1；≥0.80 推荐有效）",
+    "rr_max_gap_s": "显示因时间轴缺口/掉峰造成的超长 RR",
+    "group": "对照组",
 }

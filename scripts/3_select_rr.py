@@ -31,8 +31,18 @@ PLOT_RANGE_MODE = 'auto'
 DEC_SUGG = PREVIEW_DIR / "decision_suggested.csv"
 DEC_FILE = PREVIEW_DIR / "decision.csv"
 
-# 仅输出列表中被试的结果，用于快速检验。列表为空时，输出所有被试数据
-PRE_SID = []
+# 仅对列表中被试的结果绘图，用于快速检验。列表为空时，输出所有被试数据
+# 可以在settings中设置, 如果嫌麻烦，在这里设置亦可
+PRE_SID = ["P002S001T001R001"]
+
+# —— comb_rr 默认阈值（可按需调）——
+# 设置在什么情况下混合 设备rr 与 ecgrr 的值
+RR_COMBINE = {
+    "diff_bpm_thr": 15.0,   # 两路 HR 的绝对差超过 15 bpm 记为异常
+    "min_run_s":    5.0,    # 连续超阈时长至少 5 s 才算片段
+    "dilate_s":     2.0,    # 片段左右扩张 2 s，避免边界拼接伪影
+    "jitter_tol_ms": 80.0   # 逐搏层面的去重容差
+}
 
 # 读取 ecg 数据
 def _read_ecg(sid: str):
@@ -450,13 +460,13 @@ def main():
     """
     # 找到所有 被测id <sid>（有 rr 或 ecg 的算）
     sids = sorted({p.stem.split("_")[0] for p in SRC_NORM_DIR.glob("*_rr.csv")}|{p.stem.split("_")[0] for p in SRC_NORM_DIR.glob("*_ecg.*")})
-    # 仅挑选用户指定的被试
-    # 被试过滤：仅输出 PRE_SID 指定的被试；为空则全量
-    if isinstance(PRE_SID, (list, tuple)) and len(PRE_SID) > 0:
-        sids = [s for s in sids if s in PRE_SID]
-        print(f"[select] 仅处理 {len(sids)} 个被试 → {sids}")
-        if not sids:
-            print("[info] 过滤后为空，退出。"); return
+
+    # 预览集合：由 PRE_SID 决定（空表示全部预览）；数据分析集合始终为全部被试
+    DRAW_SIDS = set(PRE_SID) if isinstance(PRE_SID, (list, tuple)) and len(PRE_SID) > 0 else set()
+    if len(DRAW_SIDS) > 0:
+        print(f"[preview] 仅为以下被试保存预览图：{sorted(DRAW_SIDS)}")
+    else:
+        print("[preview] PRE_SID 为空：将为全部被试保存预览图。")
 
     if not sids:
         print(f"[err] {SRC_NORM_DIR} 下没找到 *_rr.csv 或 *_ecg.*"); return
@@ -465,15 +475,8 @@ def main():
     has_any_device_rr = any(SRC_NORM_DIR.glob("*_rr.csv"))
     if not has_any_device_rr:
         RR_OUT_DIR.mkdir(parents=True, exist_ok=True)
-        # 选择需要绘图预览的被试：
-        preview_sid = None
-        # 拿出选中的被试绘图
-        pre_sid = PRE_SID
-        if pre_sid and len(pre_sid) == 1:
-            # 用过滤后的列表中第一个（若存在）
-            preview_sid = pre_sid[0] if len(pre_sid) > 0 else None
-        else:
-            preview_sid = sids[0] if len(sids) > 0 else None
+        # 预览绘图控制：DRAW_SIDS 为空表示“全部预览”，否则只预览集合内的被试
+        plotted_any = False
         out_rows = []
         iter_sids = tqdm(sids, desc="ECG→RR", unit="sid") if tqdm else sids
         for sid in iter_sids:
@@ -488,13 +491,15 @@ def main():
             out = RR_OUT_DIR / f"{sid}_rr.csv"
             rr.to_csv(out, index=False)
             out_rows.append({"subject_id": sid, "rows": len(rr), "source": "ecg_rr"})
-            if preview_sid is not None and sid == preview_sid:
+            do_plot = (len(DRAW_SIDS) == 0) or (sid in DRAW_SIDS)
+            if do_plot:
                 _plot_preview_single_rr(sid, rr)
+                plotted_any = True
         # 保存一个简要概览
         if out_rows:
             pd.DataFrame(out_rows).to_csv(PREVIEW_DIR / "final_rr_summary.csv", index=False)
             print(f"[save] 最终 RR 概览 → {PREVIEW_DIR/'final_rr_summary.csv'}")
-        print("[done] ECG-only 模式完成（跳过建议/决策阶段）。")
+        print("[done] ECG-only 模式：已为全部被试生成最终 RR（跳过建议/决策第二阶段）。PRE_SID 仅影响是否保存预览图。")
         return
 
     # 第一阶段：若没有决策表，就只做建议
@@ -586,28 +591,29 @@ def main():
         })
 
         # 画对比图
-        fig, ax = plt.subplots(figsize=(12,3))
-        if rr_dev is not None: ax.plot(bins, hr_dev, label="HR from device RR")
-        if rr_ecg is not None: ax.plot(bins, hr_ecg, label="HR from ECG→RR", linestyle="--")
-        tit = f"{sid}  MAE={mae:.2f}  bias={bias:+.2f} bpm"
-        # ax.set_title(tit); ax.set_xlabel("time (s)"); ax.set_ylabel("bpm"); ax.legend(); ax.grid(True, alpha=.3)
-        # fig.tight_layout(); fig.savefig(PREVIEW_DIR / f"preview_{sid}.png", dpi=130); plt.close(fig)
-        ax.set_title(tit)
-        ax.set_xlabel("time (s)")
-        ax.set_ylabel("bpm")
-        ax.legend()
-        ax.grid(True, alpha=.3)
-         # 选择横轴范围并叠加 events/acc
-        xmin, xmax = _determine_plot_range(sid, bins)
-        if xmin is not None and xmax is not None:
-            ax.set_xlim(xmin, xmax)
-            rng = (xmin, xmax)
-        else:
-            rng = (bins[0], bins[-1])
-        _overlay_events_and_acc(ax, sid, bins_range=rng)
-        fig.tight_layout()
-        fig.savefig(PREVIEW_DIR / f"preview_{sid}.png", dpi=130)
-        plt.close(fig)
+        if (len(DRAW_SIDS) == 0) or (sid in DRAW_SIDS):
+            fig, ax = plt.subplots(figsize=(12,3))
+            if rr_dev is not None: ax.plot(bins, hr_dev, label="HR from device RR")
+            if rr_ecg is not None: ax.plot(bins, hr_ecg, label="HR from ECG→RR", linestyle="--")
+            tit = f"{sid}  MAE={mae:.2f}  bias={bias:+.2f} bpm"
+            # ax.set_title(tit); ax.set_xlabel("time (s)"); ax.set_ylabel("bpm"); ax.legend(); ax.grid(True, alpha=.3)
+            # fig.tight_layout(); fig.savefig(PREVIEW_DIR / f"preview_{sid}.png", dpi=130); plt.close(fig)
+            ax.set_title(tit)
+            ax.set_xlabel("time (s)")
+            ax.set_ylabel("bpm")
+            ax.legend()
+            ax.grid(True, alpha=.3)
+            # 选择横轴范围并叠加 events/acc
+            xmin, xmax = _determine_plot_range(sid, bins)
+            if xmin is not None and xmax is not None:
+                ax.set_xlim(xmin, xmax)
+                rng = (xmin, xmax)
+            else:
+                rng = (bins[0], bins[-1])
+            _overlay_events_and_acc(ax, sid, bins_range=rng)
+            fig.tight_layout()
+            fig.savefig(PREVIEW_DIR / f"preview_{sid}.png", dpi=130)
+            plt.close(fig)
 
     # 无决策文件则生成建议并退出
     if not DEC_FILE.exists():
@@ -637,9 +643,6 @@ def main():
 
     # 第二阶段：读取决策，产“最终 RR”
     dec = pd.read_csv(DEC_FILE)
-    # 若用户设置过滤被试id，只定稿这些 sid；否则定稿表中所有行
-    if pre_sid == 1:
-        print(f"[finalize] 仅对这些被试生成最终 RR：{sorted(pre_sid)}")
 
     out_rows=[]
     for _, r in dec.iterrows():
@@ -655,10 +658,11 @@ def main():
         RR_OUT_DIR.mkdir(parents=True, exist_ok=True)
         out = RR_OUT_DIR / f"{sid}_rr.csv"
         rr.to_csv(out, index=False)
-        print(f"[2rr] {sid} → {out.name} (rows={len(rr)})")
+        print(f"[rr file] {sid} → {out.name} (rows={len(rr)})")
         out_rows.append({"subject_id":sid, "rows":len(rr), "source":choice})
     if out_rows:
         pd.DataFrame(out_rows).to_csv(PREVIEW_DIR/"final_rr_summary.csv", index=False)
+        print(f"[save] 最终 RR 保存 → { RR_OUT_DIR }")
         print(f"[save] 最终 RR 概览 → {PREVIEW_DIR/'final_rr_summary.csv'}")
     print("[done] RR 选择完成。")
 if __name__=="__main__":
