@@ -211,7 +211,7 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
     label_tpl = wcfg.get("labeling", {}).get(mode, "{s:.1f}-{e:.1f}")
     windows: list[dict] = []
 
-    # 统一最小时长（秒），由 settings.PARAMS.min_window 配置，默认 1.0s
+    # 统一最小时长（秒），由 settings.PARAMS.min_window 配置
     min_win = PARAMS["min_window"]
     def add_win(s: float, e: float, meaning: str):
         if s is None or e is None:
@@ -307,6 +307,7 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
             )
         )
 
+
     elif mode == "sliding":
         m = wcfg["modes"]["sliding"]
         w = m.get("win_len_s")
@@ -352,6 +353,52 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
                 s_cur, e_cur = t, t + float(w)
                 add_win(s_cur, e_cur, label_tpl.format(s=s_cur, e=e_cur, w=float(w), step=step))
                 t += step
+
+    elif mode == "events_offset":
+        # 基于相邻事件成窗，并按 offset[窗号]=缩进秒数，对称内缩两端
+        m = wcfg["modes"].get("events_offset", {})
+        # 事件文件路径优先使用本模式的 events_path
+        events_dir = (DATA_DIR / m.get("events_path", "")).resolve()
+        ev = load_events_for_sid(cfg, sid, prefer_dir=events_dir)
+        if ev is None or ev.empty:
+            raise SystemExit(f"[error] {sid}：events_offset 模式需要事件表，但在 {events_dir} 未找到 {sid}_events.csv 或 .parquet")
+
+        ev = ev.sort_values("time_s").reset_index(drop=True)
+        n_ev = len(ev)
+        if n_ev < 2:
+            raise SystemExit(f"[error] {sid}：events_offset 模式需要至少 2 个事件。实际仅 {n_ev} 个。")
+
+        offsets = m.get("offset", {})
+        # 事件数与偏移数关系：只要求  (事件数-1) > 偏移数
+        # 即，事件间隔应多于要应用偏移的窗口数；随后仅使用前 K=len(offsets) 个相邻事件间隔。
+        W_all = n_ev - 1                         # 可形成的总窗口数
+        K = len(offsets)                         # 研究者指定的偏移数量
+        if K <= 0:
+            raise SystemExit(f"[error] {sid}：events_offset.offset 未设置或为空。")
+        if W_all <= K:
+            raise SystemExit(
+                f"[error] {sid}：事件数量不足：有 {n_ev} 个事件，可形成 {W_all} 个相邻窗；"
+                f"但需要应用 {K} 个偏移（要求：事件窗数 > 偏移数）。"
+            )
+
+        # 逐窗按 1-based 窗号读取偏移；需要存在键 1..K
+        d_list = []
+        missing_keys = [j for j in range(1, K+1) if (j not in offsets and str(j) not in offsets)]
+        if missing_keys:
+            raise SystemExit(f"[error] {sid}：events_offset 缺少键 {missing_keys} 的偏移值（窗号从 1 开始连续编号）。")
+        for j in range(1, K+1):
+            v = offsets.get(j, offsets.get(str(j), 0.0))
+            d_list.append(float(v or 0.0))
+
+        # 仅取前 K 个相邻事件间隔
+        for i in range(K):  # 仅取前 K 个相邻事件间隔
+            s = float(ev.loc[i,   "time_s"])
+            e = float(ev.loc[i+1, "time_s"])
+            d = float(d_list[i])  # 两头各缩进 d 秒（来自已裁剪排序的偏移列表）
+            s_adj = s + d
+            e_adj = e - d
+            # 落盘逻辑（反序/最小时长）沿用 add_win 的统一校验
+            add_win(s_adj, e_adj, f"事件{i+1}内缩{offsets.get(str(i+1))}s")
 
     elif mode == "events_single":
         m = wcfg["modes"]["events_single"]

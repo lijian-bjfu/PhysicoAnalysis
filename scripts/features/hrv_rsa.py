@@ -52,12 +52,11 @@ def _estimate_resp_rate_from_peaks(t_s: np.ndarray, peaks_idx: np.ndarray) -> fl
     if peaks_idx.size < 2:
         return np.nan
     periods = np.diff(t_s[peaks_idx])
-    if periods.size == 0 or np.any(periods <= 0):
+    periods = periods[np.isfinite(periods) & (periods > 0)]
+    if periods.size == 0:
         return np.nan
-    mean_period = float(np.mean(periods))
-    if mean_period <= 0:
-        return np.nan
-    return 60.0 / mean_period
+    # 使用中位数更稳健
+    return 60.0 / float(np.median(periods))
 
 
 # ---------- 公共 API ----------
@@ -130,41 +129,79 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
     max_dist_sec = 60.0 / resp_min_bpm  # 最长周期（低频呼吸）
     distance_pts = max(1, int(np.floor(min_dist_sec / dt * 0.8)))
 
-    peaks, _ = find_peaks(x_resp, distance=distance_pts, prominence=resp_peak_prominence)
+    # —— 轻度预处理（可选）：仅用于稳健找峰，不改变RSA定义 ——
+    x_filt = x_resp.copy()
+    smooth_sec = float(PARAMS.get('rsa_resp_smooth_sec', 0.0))
+    if smooth_sec > 0:
+        win = max(1, int(round(smooth_sec / dt)))
+        # 使用奇数窗保证峰位不系统性偏移
+        if win % 2 == 0:
+            win += 1
+        if win > 1:
+            ker = np.ones(win, dtype=float) / float(win)
+            x_filt = np.convolve(x_filt, ker, mode='same')
 
-    # 过滤非生理周期（使用峰-峰间期）
-    valid_peaks = []
-    for i in range(len(peaks) - 1):
-        p0, p1 = peaks[i], peaks[i+1]
-        period = t_resp[p1] - t_resp[p0]
-        if period <= 0:
-            continue
-        bpm = 60.0 / period
-        if resp_min_bpm <= bpm <= resp_max_bpm:
-            valid_peaks.append(peaks[i])
-    # 末尾峰只用于界定最后一个周期的结束
-    if len(valid_peaks) >= 1 and peaks.size >= 2:
-        # 确保最后一个周期有终点
-        last = valid_peaks[-1]
-        # 找到 last 之后的下一个峰作为终点
-        tail_candidates = peaks[peaks > last]
-        if tail_candidates.size >= 1:
-            valid_peaks = np.array(valid_peaks + [tail_candidates[0]])
-        else:
-            valid_peaks = np.array(valid_peaks)
+    # 动态显著性：若未指定（=0），用 IQR 的一小部分抑制毛刺
+    if resp_peak_prominence and resp_peak_prominence > 0:
+        prom = resp_peak_prominence
     else:
-        valid_peaks = np.array(valid_peaks)
+        q75, q25 = np.percentile(x_filt, [75, 25])
+        iqr = float(q75 - q25)
+        prom = 0.1 * iqr if np.isfinite(iqr) and iqr > 0 else 0.0
 
+    # 同时尝试向上峰与向下峰，自动选择有效周期更多的一侧
+    peaks_pos, _ = find_peaks(x_filt, distance=distance_pts, prominence=prom)
+    peaks_neg, _ = find_peaks(-x_filt, distance=distance_pts, prominence=prom)
+
+    def _valid_with_tail(peaks_idx: np.ndarray) -> np.ndarray:
+        if peaks_idx.size < 2:
+            return np.array([], dtype=int)
+        v = []
+        for i in range(peaks_idx.size - 1):
+            p0, p1 = peaks_idx[i], peaks_idx[i+1]
+            period = t_resp[p1] - t_resp[p0]
+            if period <= 0:
+                continue
+            bpm = 60.0 / period
+            if resp_min_bpm <= bpm <= resp_max_bpm:
+                v.append(peaks_idx[i])
+        if len(v) >= 1:
+            tail_candidates = peaks_idx[peaks_idx > v[-1]]
+            if tail_candidates.size >= 1:
+                v = np.array(v + [tail_candidates[0]], dtype=int)
+            else:
+                v = np.array(v, dtype=int)
+        else:
+            v = np.array([], dtype=int)
+        return v
+
+    vpos = _valid_with_tail(peaks_pos)
+    vneg = _valid_with_tail(peaks_neg)
+    # 以可用周期数（size-1）为准择优；平手时优先正峰
+    cycles_pos = max(0, vpos.size - 1)
+    cycles_neg = max(0, vneg.size - 1)
+    valid_peaks = vpos if cycles_pos >= cycles_neg else vneg
+
+    # 若仍不足以形成周期，则尽早返回（报告基于较多的一侧估计的呼吸率）
     if valid_peaks.size < 2:
+        base_peaks = peaks_pos if peaks_pos.size >= peaks_neg.size else peaks_neg
         return pd.DataFrame([{
             'rsa_ms': np.nan,
-            'resp_rate_bpm': _estimate_resp_rate_from_peaks(t_resp, peaks) if peaks.size >= 2 else np.nan,
+            'resp_rate_bpm': _estimate_resp_rate_from_peaks(t_resp, base_peaks) if base_peaks.size >= 2 else np.nan,
             'n_breaths_used': 0,
             'rsa_method': 'unavailable'
         }])
 
     # —— RR → 心搏时间 ——
     rr = rr_df['rr_ms'].to_numpy(dtype=float)
+    rr = rr[np.isfinite(rr) & (rr > 0)]
+    if rr.size == 0:
+        return pd.DataFrame([{
+            'rsa_ms': np.nan,
+            'resp_rate_bpm': _estimate_resp_rate_from_peaks(t_resp, valid_peaks) if valid_peaks.size >= 2 else np.nan,
+            'n_breaths_used': 0,
+            'rsa_method': 'unavailable'
+        }])
     t_beats = _rr_to_beat_times(rr)
 
     # —— 在每个呼吸周期内计算 (max RR - min RR) ——

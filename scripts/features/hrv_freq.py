@@ -41,7 +41,7 @@ def _interpolate_rr(rr_ms: np.ndarray, fs_interp: float = 4.0) -> Tuple[np.ndarr
     return t_uniform, rr_interp
 
 def _welch_psd(rr_interp_ms: np.ndarray, fs_interp: float = 4.0) -> Tuple[np.ndarray, np.ndarray]:
-    """Welch PSD of mean-removed tachogram (ms). One-sided PSD in (ms^2/Hz)."""
+    """Welch PSD of detrend='linear'. One-sided PSD in (ms^2/Hz)."""
     if rr_interp_ms.size < 16:
         return np.array([]), np.array([])
     x = rr_interp_ms
@@ -66,8 +66,6 @@ def _estimate_resp_peak(resp_df: pd.DataFrame, lo: float = 0.1, hi: float = 0.5)
     # Resp input expected columns: ['t_s','resp'] with near-uniform sampling
     t = resp_df['t_s'].to_numpy()
     x = resp_df['resp'].to_numpy()
-    if t.size < 32:
-        return None
     fs = 1.0 / np.median(np.diff(t))
     # Welch PSD
     nperseg = min(len(x), 512)
@@ -117,18 +115,34 @@ def features_segment(rr_df: pd.DataFrame,
     _, rr_interp = _interpolate_rr(rr_df["rr_ms"].to_numpy(dtype=float), fs_interp=fs_interp)
     f, pxx = _welch_psd(rr_interp, fs_interp=fs_interp)
 
-    band_used = "fixed"
-    hf_center = np.nan
-
-    # HF band selection
+    # HF band selection（等宽滑移：在固定 HF 内保持恒定带宽 2*rad）
     if use_individual and (resp_df is not None) and (resp_df.shape[0] > 0):
         f0 = _estimate_resp_peak(resp_df)
         if f0 is not None and (hf_fixed_lo <= f0 <= hf_fixed_hi):
-            lo = max(hf_fixed_lo, f0 - rad)
-            hi = min(hf_fixed_hi, f0 + rad)
+            # 目标：始终使用恒定带宽 width = 2*rad；若触边则整体平移到 [hf_fixed_lo, hf_fixed_hi] 内
+            width = 2.0 * rad
+            # 保险：若 rad 设得过大，带宽不超过固定 HF 总宽度
+            max_width = max(0.0, hf_fixed_hi - hf_fixed_lo)
+            if width > max_width:
+                width = max_width
+                rad_eff = width / 2.0
+            else:
+                rad_eff = rad
+
+            if (f0 - rad_eff) < hf_fixed_lo:
+                lo = hf_fixed_lo
+                hi = hf_fixed_lo + width
+            elif (f0 + rad_eff) > hf_fixed_hi:
+                lo = hf_fixed_hi - width
+                hi = hf_fixed_hi
+            else:
+                lo = f0 - rad_eff
+                hi = f0 + rad_eff
+
             band_used = "individual"
             hf_center = float(f0)
         else:
+            # f0 不在固定 HF 内或不可得：退回固定带宽
             lo, hi = hf_fixed_lo, hf_fixed_hi
     else:
         lo, hi = hf_fixed_lo, hf_fixed_hi

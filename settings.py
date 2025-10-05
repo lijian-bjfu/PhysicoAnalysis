@@ -25,9 +25,7 @@ PARAMS = {
     "valid_rr_ratio_min": 0.80,
     "require_5min_for_freq": True,
 
-    # —— 时域口径 （供 hrv_time 使用） ——
-    # pNNx 阈值（ms），默认 pNN50
-    "pnn_threshold_ms": 50.0,   
+    # —— 时域口径 （供 hrv_time 使用） —— 
     # 1=样本标准差（推荐），0=总体标准差
     "sdnn_ddof": 1,             
 
@@ -48,6 +46,9 @@ PARAMS = {
     # —— RSA 窦性呼吸性心律不齐口径（供 hrv_rsa 使用） ——
     # RSA 前是否把该段呼吸时间重置为0，只影响 RSA 模块
     "rsa_rebase_resp": True,
+    # 下面的参数目的是让每个呼吸周期只出现一个稳定的主峰 
+    # 0.5表示以该秒数为窗长对呼吸波做一次轻度平滑，再找峰
+    "rsa_resp_smooth_sec": 0.5,
     # 呼吸生理范围（次/分）。用于筛掉不合生理的峰间期：
     #   最低 6 次/分 ≈ 0.10 Hz；最高 30 次/分 ≈ 0.50 Hz。
     #   若你的被试常进行慢呼吸训练，可适当下调 resp_min_bpm（例如 4）。
@@ -139,24 +140,29 @@ DATASETS = {
             "sample": "P001S001T001R001",
             # 切片法，指定哪几个字符是分组信息
             "group_map": {
-                "session": {"start": 4, "end": 7},  # 左闭右开，0 起算
-                "task":    {"start": 8, "end": 11},
-                "run":     {"start": 12, "end": 15}
+                "task": {"start": 3, "end": 4},
+                # "session": {"start": 4, "end": 7},  # 左闭右开，0 起算
+                # "task":    {"start": 8, "end": 11},
+                # "run":     {"start": 12, "end": 15}
             },
             # 为各组赋值
             "value": {
-                "session":{
-                    "001": 1,
-                    "002": 2,
-                },
                 "task":{
-                    "001": 1,
-                    "002": 2,
+                    "2": 1,
+                    "3": 2,
                 },
-                "run":{
-                    "001": 1,
-                    "002": 2,
-                },
+                # "session":{
+                #     "001": 1,
+                #     "002": 2,
+                # },
+                # "task":{
+                #     "001": 1,
+                #     "002": 2,
+                # },
+                # "run":{
+                #     "001": 1,
+                #     "002": 2,
+                # },
             },
             # 最终会使用哪些组
             "use": ["task",],
@@ -164,7 +170,7 @@ DATASETS = {
         # windowing 下必需配置的两项：use, method
         "windowing":{
             # 说明：这里仅定义“切窗策略的配置”，真正执行在 4_windowing.py
-            "use": "events",  # 默认切窗方法，可选：events / single / sliding / events_single / events_sliding / single_sliding
+            "use": "events_offset",  # 默认切窗方法，可选：events / single / sliding / events_offset /events_single / events_sliding / single_sliding
 
             # 切窗方法。包括 cover 和 subdivide 两种。cover 重新切窗覆盖之前的数据，subdivide 选择一段数据切窗
             "method": "cover", # cover | subdivide
@@ -194,9 +200,27 @@ DATASETS = {
                 "single": {"start_s": None, "end_s": None, "win_len_s": 300},
 
                 # 3) 滑窗：在 [start_s,end_s] 范围内按 win_len/stride 切窗
+                # 时间按照相对值设置。例如开始时间设为 12, 
+                # 则会从数据实际开始点向后偏移12秒作为起始点
+                # win_len_s 不得为None
+                # start_s / end_s 如果为 None 使用数据绝对起始点，同时向用户提出警告
+                # stride_s 正数为两窗之间的间隔距离，复数表示两窗重叠距离。0或None表示紧贴
                 "sliding": {"start_s": None, "end_s": None, "win_len_s": None, "stride_s": None},
 
-                # 4) 事件 + 单段：以事件为锚，局部切一个窗口
+                # 4) 事件+偏移：基于切窗数据对每个窗偏移避开不安全数据
+                "events_offset": {
+                    # 事件文件路径
+                    "events_path": "processed/norm/local",
+                    # 偏移设定
+                    "offset": {
+                        # 窗号:偏移值。窗号根据 events 定义，值由用户设定。
+                        # 1:30 表示第一个窗向两头内缩进 30s
+                        "1": 30,
+                        "2": 60,
+                    },
+                },
+
+                # 5) 事件 + 单段：以事件为锚，局部切一个窗口
                 "events_single": {
                     "events_path": "processed/norm/local",
                     "anchor_event": "stim_start",   # 选此模式，此项必填；None 则报错
@@ -204,15 +228,13 @@ DATASETS = {
                     "win_len_s": None
                 },
 
-                # 5) 事件 + 滑窗：在某个事件区间内滑窗
+                # 6) 事件 + 滑窗：在某个事件区间内滑窗
                 "events_sliding": {
                     "events_path": "processed/norm/local",
                     "segment": ["intervention_start","intervention_end"],  # 必填：事件名对
                     "win_len_s": None,
                     "stride_s":  None
                 },
-                # 6) 单段 + 滑窗：先定边界，再滑窗
-                "single_sliding": {"start_s": None, "end_s": None, "win_len_s": None, "stride_s": None}
             },
 
             # 窗口含义命名模板（写入每个窗的 meaning 字段）

@@ -69,11 +69,17 @@ def _mean_hr_bpm(rr_ms: np.ndarray) -> float:
 def _poincare_sd1_sd2(rr_ms: np.ndarray) -> tuple[float, float]:
     if rr_ms.size < 2:
         return (np.nan, np.nan)
+    # 与 SDNN 保持一致：使用样本方差 ddof=1（可由 PARAMS['sdnn_ddof'] 控制）
+    ddof = int(PARAMS.get('sdnn_ddof', 1))
     diff = np.diff(rr_ms)
-    # SD1 = sqrt(Var(diff)/2), SD2 = sqrt(2*Var(rr) - Var(diff)/2)
-    sd1 = np.sqrt(np.var(diff, ddof=0) / 2.0)
-    sd2 = np.sqrt(2.0 * np.var(rr_ms, ddof=0) - (np.var(diff, ddof=0) / 2.0))
-    return (float(sd1), float(sd2))
+    var_diff = np.var(diff, ddof=ddof)
+    var_rr   = np.var(rr_ms, ddof=ddof)
+    # 数值稳定性保护：极少数浮点误差下被开方项可能出现微负，截断到 0
+    sd1_term = var_diff / 2.0
+    sd2_term = 2.0 * var_rr - (var_diff / 2.0)
+    sd1 = float(np.sqrt(sd1_term if sd1_term > 0.0 else 0.0))
+    sd2 = float(np.sqrt(sd2_term if sd2_term > 0.0 else 0.0))
+    return (sd1, sd2)
 
 
 # --------- 公共 API（与 hrv_freq 一致的签名） ---------
@@ -89,8 +95,8 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
     返回
     单行 DataFrame：['mean_hr_bpm','rmssd_ms','sdnn_ms','pnn50_pct','sd1_ms','sd2_ms']。
     """
-    # 从全局配置读取必要口径
-    pnn_threshold = float(PARAMS.get('pnn_threshold_ms', 50.0))
+    # 固定为 pNN50，避免口径歧义
+    pnn_threshold = 50.0  # 固定为 pNN50，避免口径歧义
     sdnn_ddof = int(PARAMS.get('sdnn_ddof', 1))  # 1=样本标准差
 
     # 取 RR 数组

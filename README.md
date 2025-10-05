@@ -61,4 +61,20 @@ local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文
 
 操作方法：`5a_windowing.py`
 
-- `windowing`：切窗设置。首要的两个设置为`use`和`method`。`use`设置切窗策略，可选策略包括根据事件信息切窗、切单窗、滑窗、事件+单窗、事件+滑窗、单窗+滑窗，(events / single / sliding / events_single / events_sliding / single_sliding) 共6种。`method`设置切窗方法，包括全切与细分2种（cover / subdivide）。全切不考虑切窗历史，细分则考虑上一次切窗历史，对上一次切窗结果中的某一部分进行再次切窗。
+首先需要在settings中设置 `windowing` 切窗设置。首要的两个设置为`use`和`method`。
+
+`method`设置切窗方法，包括全切与细分2种（cover / subdivide）。全切不考虑切窗历史，细分则考虑上一次切窗历史，对上一次切窗结果中的某一部分进行再次切窗。第一次cover的结果会放在 processed/windowing/local/level1下。对上一次切窗结果的每次“细分”切窗会自动增加一极level。每次切窗会生成一个log文件供使用者追溯各切窗之间的关系，以及一个index文件便于后续对所有的窗口的整合组装。
+
+`use`设置切窗策略，可选策略包括根据事件信息切窗、切单窗、滑窗、事件+单窗、事件+滑窗、单窗+滑窗，(events / single / sliding / events_offset / events_sliding / single_sliding) 共6种。使用 events 切窗需要事件表，在 `events_path`下设置路径。开始时间为相对位置，例如start_s 设置为12，会从数据12秒的位置作为切窗开始位置。
+
+## 整理切窗数据
+
+操作方法：`5b_collect_windowing.py
+
+将所有的切窗整理为后续可用的数据。数据保存在windowing/collected/下。数据按照信号类型放在不同的文件夹。同时还生成一个collected_index.csv，供后续整理心率指标的长表使用。
+
+## 计算每窗的指标
+
+操作方法：`6_gather_features.py`
+
+该脚本调用scripts/features/下的计算时域、频域和 RSA 的API 对各窗数据计算相应的指标。形成一个长表。
