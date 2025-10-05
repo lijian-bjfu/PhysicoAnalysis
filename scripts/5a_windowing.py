@@ -102,7 +102,6 @@ def parse_level_from_dir(d: Path) -> int:
     return int(m.group(1)) if m else 1
 
 # 配置解析
-
 def _resolve_cfg():
     ds = DATASETS[ACTIVE_DATA]
     wcfg = ds["windowing"]
@@ -162,7 +161,6 @@ def load_events_for_sid(cfg: dict, sid: str, prefer_dir: Path | None = None) -> 
              .dropna(subset=["time_s","events"]).sort_values("time_s")
 
 # 预览图
-
 def draw_preview(sid: str, cfg: dict, windows: list[dict], out_dir: Path):
     import matplotlib.pyplot as plt
     rr = read_table_if_exists(cfg["paths"]["rr"]/f"{sid}_rr.csv", {"t_s":"t_s","rr_ms":"rr_ms"})
@@ -208,7 +206,6 @@ def draw_preview(sid: str, cfg: dict, windows: list[dict], out_dir: Path):
     print(f"[plot] 预览 → {out_png}")
 
 # 定义窗口（不落盘，仅输出时间对 + 含义）
-
 def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
     wcfg = cfg["wcfg"]; mode = cfg["use_mode"];
     label_tpl = wcfg.get("labeling", {}).get(mode, "{s:.1f}-{e:.1f}")
@@ -241,64 +238,119 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
         return load_events_for_sid(cfg, sid, prefer_dir=events_dir)
 
     if mode == "events":
-        pairs = wcfg["modes"]["events"].get("pairs", [])
+        # 相邻事件成窗
         ev = load_events()
-        if ev is None:
-            raise SystemExit(f"[error] {sid}：找不到事件文件用于 events 模式。")
-        ev_map = {str(r["events"]).strip(): float(r["time_s"]) for _, r in ev.iterrows()}
-        for e0, e1 in pairs:
-            if e0 in ev_map and e1 in ev_map:
-                s, e = ev_map[e0], ev_map[e1]
+        if ev is None or ev.empty:
+            evpath = wcfg["modes"].get("events", {})
+            raise SystemExit(
+                f"[error] {sid}：找不到事件文件用于 events 模式。\n  "
+                f"请在 {evpath} 指定的文件夹下检查是否存在 {sid}_events.csv/.parquet，或使用其他模式切窗"
+            )
+        ev = ev.sort_values("time_s").reset_index(drop=True)
+        if len(ev) < 2:
+            print(f"[warn] {sid}: 事件数少于 2 个，无法基于相邻事件切窗。")
+        else:
+            # 逐对相邻事件生成窗口 [event[i], event[i+1]]
+            for i in range(len(ev) - 1):
+                s = float(ev.loc[i, "time_s"])
+                e = float(ev.loc[i+1, "time_s"])
+                e0 = str(ev.loc[i, "events"]).strip()
+                e1 = str(ev.loc[i+1, "events"]).strip()
                 add_win(s, e, label_tpl.format(e0=e0, e1=e1, s=s, e=e))
 
     elif mode == "single":
+        # 新语义：single 的 start_s / end_s 为**相对数据起点 tmin 的偏移秒数**。
+        # 仅支持两种用法： [start_s, end_s]  或  [start_s, win_len_s]（二选一）。
+        # 不再使用 anchor_time_s。
         m = wcfg["modes"]["single"]
-        s = m.get("start_s"); e = m.get("end_s"); w = m.get("win_len_s"); a = m.get("anchor_time_s")
-        # 结尾设定时间锁定到实际数据时间，min(exp, real)
-        tmin, tmax = _rr_bounds(sid, cfg)
-        if s is not None and e is not None:
-            s1, e1 = max(float(s), tmin), min(float(e), tmax)
-            add_win(s1, e1, label_tpl.format(s=s1, e=e1))
-        elif s is not None and w is not None:
-            s1, e1 = max(float(s), tmin), min(float(s)+float(w), tmax)
-            add_win(s1, e1, label_tpl.format(s=s1, e=e1))
-        elif a is not None and w is not None:
-            s1, e1 = max(float(s), tmin), min(float(s)+float(w), tmax)
-            add_win(s1, e1, label_tpl.format(s=s1, e=e1))
-        else:
-            raise SystemExit("[error] single 模式参数不足（需 [start,end] 或 [start,win] 或 [anchor,win]）")
+        off_start = m.get("start_s", None)
+        off_end   = m.get("end_s", None)
+        win_len   = m.get("win_len_s", None)
 
-    elif mode in ("sliding","slid"):
-        m = wcfg["modes"]["sliding"] if mode=="sliding" else wcfg["modes"]["slid"]
-        win_len = m.get("win_len_s") or m.get("win_len")
-        gap     = m.get("stride_s", 0.0)
-        if win_len is None:
-            raise SystemExit("[error] sliding 模式缺少 win_len_s")
-
-        # 用户显式给出的起止（允许缺省）；缺省则用 RR 的真实边界
-        user_s0 = m.get("start_s", None)
-        user_e0 = m.get("end_s", None)
+        if off_start is None:
+            raise SystemExit("[error] single 模式需提供 start_s（相对数据起点的偏移秒数）")
 
         # 真实 RR 边界
         tmin, tmax = _rr_bounds(sid, cfg)
 
-        # 起点：若用户未给，则用 tmin；若给了则与 tmin 取较大值（不早于数据起点）
-        s0 = tmin if user_s0 is None else max(float(user_s0), tmin)
+        # 绝对起点：起点 = tmin + start_s，并与 tmin 夹紧
+        s_abs = max(float(tmin) + float(off_start), float(tmin))
 
-        # 终点：若用户未给，则用 tmax；若给了则与 tmax 取较小值（不晚于数据终点）
-        e0 = tmax if user_e0 is None else min(float(user_e0), tmax)
+        # 二选一：end_s（相对 tmin 的偏移）或 win_len_s
+        if (off_end is not None) and (win_len is not None):
+            raise SystemExit("[error] single 模式参数冲突：end_s 与 win_len_s 只能二选一。")
 
-        if e0 - s0 < float(win_len):
-            print(f"[warn] {sid}: 有效区间不足一个窗（{fmt_s(s0)}~{fmt_s(e0)}，win={win_len}s），本被试无窗口。")
+        if off_end is not None:
+            # 绝对终点 = tmin + end_s，再与 tmax 夹紧
+            e_abs = min(float(tmin) + float(off_end), float(tmax))
+        elif win_len is not None:
+            e_abs = min(s_abs + float(win_len), float(tmax))
         else:
-            step = _compute_step(float(win_len), gap)
-            approx_n = int(max(0, (float(e0) - float(s0) - float(win_len)) / step))
-            if step < 0.01 * float(win_len) or approx_n > 10000:
-                print(f"[warn] {sid}: 步长过小或窗口数过多 step={step:.6f}, win={float(win_len):.6f}, 预计窗口数≈{approx_n}")         
-            t = float(s0)
-            while t + float(win_len) <= float(e0) + 1e-9:
-                s_cur, e_cur = t, t + float(win_len)
-                add_win(s_cur, e_cur, label_tpl.format(s=s_cur, e=e_cur))
+            raise SystemExit("[error] single 模式参数不足，end_s 或 win_len_s 至少要设定一个")
+
+        # 合法性检查
+        if e_abs <= s_abs:
+            raise SystemExit(f"[error] single 窗口反序/零长度：start={fmt_s(s_abs)} ≥ end={fmt_s(e_abs)}")
+        if (e_abs - s_abs) < float(PARAMS["min_window"]):
+            raise SystemExit(f"[error] single 窗口短于最小时长 {PARAMS['min_window']}s："
+                             f"start={fmt_s(s_abs)} end={fmt_s(e_abs)}")
+
+        # 记录窗口
+        add_win(
+            s_abs,
+            e_abs,
+            label_tpl.format(
+                s=s_abs, e=e_abs,
+                start=float(off_start),
+                end=(None if off_end is None else float(off_end)),
+                w=(None if win_len is None else float(win_len))
+            )
+        )
+
+    elif mode == "sliding":
+        m = wcfg["modes"]["sliding"]
+        w = m.get("win_len_s")
+        if w is None or float(w) <= 0:
+            raise SystemExit("[error] sliding 模式必须设定窗口长度且必须大于 0，请在 settings.windowing.modes.sliding.win_len_s 中设置。")
+
+        # 新语义：
+        # - start_s / end_s 解释为相对数据起点 tmin 的偏移秒数；
+        # - 若为 None，则分别使用数据起点/终点，并打印警告；
+        # - stride_s 表示“相邻窗口之间的间隔（gap）”，可为正/负/零；None 视为 0（紧贴）。
+        gap = m.get("stride_s", None)
+        gap = 0.0 if gap is None else float(gap)
+
+        # 真实 RR 边界
+        tmin, tmax = _rr_bounds(sid, cfg)
+
+        off_start = m.get("start_s", None)
+        off_end   = m.get("end_s", None)
+
+        if off_start is None:
+            s_abs = float(tmin)
+            print(f"[warn] {sid}: sliding.start_s 未设置，使用数据起点 {fmt_s(tmin)} 作为开始。")
+        else:
+            s_abs = max(float(tmin) + float(off_start), float(tmin))
+
+        if off_end is None:
+            e_abs = float(tmax)
+            print(f"[warn] {sid}: sliding.end_s 未设置，使用数据终点 {fmt_s(tmax)} 作为结束。")
+        else:
+            e_abs = min(float(tmin) + float(off_end), float(tmax))
+
+        if e_abs - s_abs < float(w):
+            print(f"[warn] {sid}: 有效区间不足一个窗（{fmt_s(s_abs)}~{fmt_s(e_abs)}，win={float(w):.0f}s），本被试无窗口。")
+        else:
+            step = _compute_step(float(w), gap)  # step = win_len + gap；gap<0 表示重叠
+            # 仅提示：若步长极小导致窗口数可能过多
+            approx_n = int(max(0, (float(e_abs) - float(s_abs) - float(w)) / step)) if step > 0 else 0
+            if step < 0.01 * float(w) or approx_n > 10000:
+                print(f"[warn] {sid}: 步长过小或窗口数过多 step={step:.6f}, win={float(w):.6f}, 预计窗口数≈{approx_n}")
+
+            t = float(s_abs)
+            while t + float(w) <= float(e_abs) + 1e-9:
+                s_cur, e_cur = t, t + float(w)
+                add_win(s_cur, e_cur, label_tpl.format(s=s_cur, e=e_cur, w=float(w), step=step))
                 t += step
 
     elif mode == "events_single":
@@ -309,7 +361,7 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
         if ev is None:
             raise SystemExit(f"[error] events_single 模式需要事件表，但在 {events_dir} 未找到 {sid}_events.csv 或 .parquet")
         
-        # 来自事件列表，去settings 填写。不可以为 None
+        # 锚点事件来自事件列表，去settings 填写。不可以为 None
         anchor = m.get("anchor_event", None)
         off = float(m.get("offset_s", 0.0) or 0.0)
         w = m.get("win_len_s", None)
@@ -324,7 +376,7 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
         m = wcfg["modes"]["events_sliding"]
         ev = load_events()
         if ev is None:
-            raise SystemExit("[error] events_sliding 需要事件文件")
+            raise SystemExit("[error] events_sliding 需要事件文件，确认 {m} 文件夹下有该文件。")
         seg = m.get("segment", None)
         w = m.get("win_len_s")
         gap = m.get("stride_s", 0.0)
@@ -354,36 +406,12 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
                 s_cur, e_cur = t, t + float(w)
                 add_win(s_cur, e_cur, label_tpl.format(s=s_cur, e=e_cur))
                 t += step
-
-    elif mode == "single_sliding":
-        m = wcfg["modes"]["single_sliding"]
-        w = m.get("win_len_s")
-        if w is None:
-            raise SystemExit("[error] single_sliding 需提供 win_len_s")
-        gap = m.get("stride_s", 0.0)
-
-        # 用户可选提供 start_s/end_s；缺省则用 RR 边界
-        user_s0 = m.get("start_s", None)
-        user_e0 = m.get("end_s", None)
-        tmin, tmax = _rr_bounds(sid, cfg)
-        s0 = tmin if user_s0 is None else max(float(user_s0), tmin)
-        e0 = tmax if user_e0 is None else min(float(user_e0), tmax)
-
-        if e0 - s0 < float(w):
-            print(f"[warn] {sid}: 可用范围不足一个窗（{fmt_s(s0)}~{fmt_s(e0)}，win={w}s），本被试无窗口。")
-        else:
-            step = _compute_step(float(w), gap)
-            t = float(s0)
-            while t + float(w) <= float(e0) + 1e-9:
-                add_win(t, t+float(w), label_tpl.format(s=s0, e=e0, w=w, step=step))
-                t += step
     else:
         raise SystemExit(f"[error] 未知模式：{mode}")
 
     return windows
 
 # subdivide：从父层 index.csv 的相同 w_id 为每个被试推断父窗区间
-
 def build_windows_subdivide(cfg: dict) -> tuple[list[dict], Path, int, int]:
     parent_example = _choose_file("请选择上一层的某个窗口文件（如 <sid>_rr_w03.csv）")
     if not parent_example or not parent_example.exists():
@@ -516,7 +544,6 @@ def _save_windows_for_subject(sid: str, cfg: dict, windows_df: pd.DataFrame, out
     return saved_counts
 
 # 主流程
-
 def main():
     cfg = _resolve_cfg()
     paths = cfg["paths"]
@@ -618,15 +645,20 @@ def main():
         f.write(f"被试数量：{len(df['subject_id'].unique())}\n")
         f.write(f"窗口总数：{len(df)}\n\n")
         f.write("每窗含义（meaning）字段按 settings.windowing.labeling[mode] 模板生成；时间格式为 mm:ss.mmm。\n\n")
-        # 仅挑第一个被试做详细列举
-        sid0 = df['subject_id'].iloc[0]
-        sub0 = df[df['subject_id']==sid0]
-        f.write(f"示例被试：{sid0}（{len(sub0)} 个窗）\n")
-        for _, r in sub0.iterrows():
-            dur = float(r['t_end_s']) - float(r['t_start_s'])
-            f.write(
-                f"  · L{int(r['level'])}:w{int(r['w_id']):02d}  [{fmt_s(r['t_start_s'])} ~ {fmt_s(r['t_end_s'])}]  时长={fmt_s(dur)}  parent=L{int(r['parent_level'])}:w{int(r['parent_w_id']):02d}  {r['meaning']}\n"
-            )
+        # 按被试逐一列举全部窗口
+        for sid_i in sorted(df['subject_id'].unique()):
+            sub_i = df[df['subject_id']==sid_i]
+            f.write(f"被试：{sid_i}（{len(sub_i)} 个窗）\n")
+            for _, r in sub_i.iterrows():
+                dur = float(r['t_end_s']) - float(r['t_start_s'])
+                f.write(
+                    f"  · L{int(r['level'])}:w{int(r['w_id']):02d}  "
+                    f"[{fmt_s(r['t_start_s'])} ~ {fmt_s(r['t_end_s'])}]  "
+                    f"时长={fmt_s(dur)}  "
+                    f"parent=L{int(r['parent_level'])}:w{int(r['parent_w_id']):02d}  "
+                    f"{r['meaning']}\n"
+                )
+            f.write("\n")
     print(f"[save] log.txt → {log_path}")
 
     # 真正落盘：对每个被试保存 RR/RESP/ACC/EVENTS 的窗口数据（含 level 与 w_id）

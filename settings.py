@@ -77,6 +77,40 @@ PARAMS = {
     #   False：严格使用文件中提供的时间戳（推荐）。
     "resp_assume_uniform": False,
     
+    # —— RR 短时尖峰清理参数（仅供 clean_rr 使用；不影响其他流程） ——
+    # 最长“短时尖峰”连续长度（搏点数）。仅当 1 ≤ 段长 ≤ 本阈值时才自动修复，
+    # 超出则只记录到 QC，不改变原始 RR。
+    "rr_short_run_max_beats": 5,
+
+    # 逐搏差的绝对阈值（毫秒）。|RR[i] − RR[i−1]| 大于该值将被视作候选异常，
+    # 与相对偏差阈（rr_artifact_threshold）共同作用，增强鲁棒性。
+    "rr_delta_abs_ms": 150.0,
+
+    # “补偿判据”容差：|(RR_i + RR_{i+1}) − 2×局部中位 RR| / (2×局部中位 RR) < 本阈值
+    # 视为“错分/多检”（一次心搏被拆成两搏），优先采用成对合并策略处理。
+    "rr_pair_comp_tolerance": 0.15,
+
+    # 提醒阈值：当检测到的“短时尖峰”段数 ≥ 本值时在日志与 QC 中给出提示，
+    # 但不阻断也不改变修复策略（仅提醒数据质量一般）。
+    "rr_groups_warn": 4,
+
+    # 提醒阈值：需修正的搏点占比（相对于整条 RR 的长度）≥ 本值时提示，
+    # 不中断。用于在批处理时快速筛出需关注的被试。
+    "rr_max_correct_ratio_warn": 0.05,
+
+    # 与参考 ecg_rr 比对时的“皆异常”判定阈值：在异常段的 ±2s 窗内，
+    # 若 median(|RR_ecg − 中位| / 中位) 超过本值，则视为两路皆异常，仅入 QC 不做自动修复。
+    "both_bad_rel_dev_thr": 0.15,
+
+    # 插值方法（仅插值路径使用）。可选 "pchip"（单调分段三次，优先）或 "linear"。
+    "interp_method": "pchip",
+
+    # 是否启用“成对合并”修复（仅当命中补偿判据时生效）。关闭则所有短段一律走插值。
+    "pair_merge_enable": True,
+
+    # 设备 RR 与 ECG R 峰配对时的最近邻容差（毫秒）。仅用于 QC/可视化或后续扩展，
+    # 不改变主要修复逻辑。
+    "ecg_pair_tol_ms": 120.0,
 }
 
 DATASETS = {
@@ -130,39 +164,34 @@ DATASETS = {
         # windowing 下必需配置的两项：use, method
         "windowing":{
             # 说明：这里仅定义“切窗策略的配置”，真正执行在 4_windowing.py
-            "use": "single",  # 默认切窗方法，可选：events / single / sliding / events_single / events_sliding / single_sliding
+            "use": "events",  # 默认切窗方法，可选：events / single / sliding / events_single / events_sliding / single_sliding
 
             # 切窗方法。包括 cover 和 subdivide 两种。cover 重新切窗覆盖之前的数据，subdivide 选择一段数据切窗
-            "method": "subdivide", # cover | subdivide
+            "method": "cover", # cover | subdivide
 
             # 切到哪些信号（不存在则自动跳过）
             "apply_to": ["rr","resp","acc"],
-
-            # 统一默认值（单位一律为秒）
-            "defaults": {
-                "win_len_s": PARAMS["window_sec"],                 # 缺省窗长（用于需要窗长的模式）
-                "bound_policy": "trim"                             # 超界时裁剪（不报错）
-            },
 
             # 各模式参数（仅在被选中时读取）
             "modes": {
                 # 1) 事件整段：按事件配对切段；不需要窗长
                 "events": {
                     "events_path": "processed/norm/local",    # 事件文件路径；None 表示不支持
-                    "pairs": [
-                        ["baseline_start","stim_start"],
-                        ["stim_start","stim_end"],
-                        ["stim_end","intervention_start"],
-                        ["intervention_start","intervention_end"]
-                    ],
+                    "events_dict": {
+                        1: "baseline_start",
+                        2: "stim_start",
+                        3: "stim_end",
+                        4: "intervention_start",
+                        5: "intervention_end",
+                        6: "stop"
+                    },
                 },
 
                 # 2) 单段：按绝对时间或锚点切一个段
-                # 三选一：给 [start_s,end_s]；或 [start_s,win_len_s]；或 [anchor_time_s,win_len_s]
-                # 时间按照绝对描述计算，可以从直接从上一层 level*/index.csv 
-                # 里读 t_start_s 那一列的数值，按上面加减就行。
-                # 比如 t_start_s = 739627.929，5分钟窗口 win_len = 300
-                "single": {"start_s": None, "end_s": None, "win_len_s": 300, "anchor_time_s": 739627.929},
+                # 三选一：给 [start_s,end_s]；或 [start_s,win_len_s]；
+                # 时间按照相对值设置，例如开始时间设为 12，
+                # 会从数据开始位置向后偏移12秒作为切窗开始
+                "single": {"start_s": None, "end_s": None, "win_len_s": 300},
 
                 # 3) 滑窗：在 [start_s,end_s] 范围内按 win_len/stride 切窗
                 "sliding": {"start_s": None, "end_s": None, "win_len_s": None, "stride_s": None},
@@ -182,7 +211,6 @@ DATASETS = {
                     "win_len_s": None,
                     "stride_s":  None
                 },
-
                 # 6) 单段 + 滑窗：先定边界，再滑窗
                 "single_sliding": {"start_s": None, "end_s": None, "win_len_s": None, "stride_s": None}
             },
@@ -257,10 +285,6 @@ DATASETS = {
             "use": "single_sliding",  # 没有事件，默认滑窗
             "method": "cover", # cover | subdivide
             "apply_to": ["rr","resp"],
-            "defaults": {
-                "win_len_s": PARAMS["window_sec"],
-                "bound_policy": "trim"
-            },
             "modes": {
                 "events": {"events_path": None, "path": None},
                 "single": {"start_s": None, "end_s": None, "win_len_s": None, "anchor_time_s": None},
