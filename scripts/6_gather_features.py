@@ -32,6 +32,7 @@ try:
     from scripts.features import hrv_time as f_time
     from scripts.features import hrv_freq as f_freq
     from scripts.features import hrv_rsa  as f_rsa
+    from scripts.features import hrv_acc  as f_acc
 except ImportError:
     from features import hrv_time as f_time
     from features import hrv_freq as f_freq
@@ -40,6 +41,7 @@ except ImportError:
 print(f"[INFO] hrv_time module: {getattr(f_time, '__file__', 'unknown')}")
 print(f"[INFO] hrv_freq module: {getattr(f_freq, '__file__', 'unknown')}")
 print(f"[INFO] hrv_rsa module: {getattr(f_rsa, '__file__', 'unknown')}")
+print(f"[INFO] hrv_acc module: {getattr(f_acc, '__file__', 'unknown')}")
 
 # Regex for <sid>_<sig>_wNN.csv
 FILE_RE = re.compile(r"^(?P<sid>[^_]+)_(?P<sig>[^_]+)_w(?P<wid>\d+)\.csv$")
@@ -94,6 +96,10 @@ def _standardize_df(df: pd.DataFrame, signal: str) -> pd.DataFrame:
         out["rr_ms"] = df[v_col].astype(float).to_numpy()
     elif signal == "resp":
         out["resp"] = df[v_col].astype(float).to_numpy()
+    elif signal == "acc":
+        out["ax"] = df[SCHEMA["acc"]["vx"]].astype(float).to_numpy()
+        out["ay"] = df[SCHEMA["acc"]["vy"]].astype(float).to_numpy()
+        out["az"] = df[SCHEMA["acc"]["vz"]].astype(float).to_numpy()
     else:
         # 其他信号暂不处理
         out[v_col] = df[v_col].to_numpy()
@@ -229,6 +235,7 @@ def main():
     TIME_COLS = {"mean_hr_bpm","rmssd_ms","sdnn_ms","pnn50_pct","sd1_ms","sd2_ms"}
     FREQ_COLS = {"hf_ms2","hf_log_ms2","lf_ms2","lf_log_ms2","hf_band_used","hf_center_hz"}
     RSA_COLS  = {"rsa_ms","resp_rate_bpm","n_breaths_used","rsa_method"}
+    ACC_COLS  = {"acc_enmo_mean", "acc_motion_frac"}
 
     rr_plan = []
     if set(requested_cols).intersection(TIME_COLS):
@@ -237,6 +244,8 @@ def main():
         rr_plan.append("freq")
     if set(requested_cols).intersection(RSA_COLS):
         rr_plan.append("rsa")
+    if set(requested_cols).intersection(ACC_COLS):
+        rr_plan.append("acc")
 
     # 打印运行配置和数据集摘要，增加打印实际存在的信号子目录
     existing_signal_dirs = [str(SRC_DIR / sig) for sig in APPLY_TO if (SRC_DIR / sig).exists() and (SRC_DIR / sig).is_dir()]
@@ -268,8 +277,10 @@ def main():
     n_rsa = 0
     n_rsa_skipped_no_resp = 0
     n_missing_rr = 0
+    n_missing_acc = 0
     n_read_errors = 0
     n_skipped_no_index = 0
+    n_acc = 0
 
     for sid, wid in tqdm(combos, desc="Computing features", unit="win"):
         rr_df = _load_segment(sid, "rr", wid)
@@ -278,14 +289,17 @@ def main():
             n_missing_rr += 1
             continue
 
-        resp_df = None
-        need_resp = ("rsa" in rr_plan) or bool(PARAMS.get("use_individual_hf", False))
-        if need_resp:
-            resp_df = _load_segment(sid, "resp", wid)
-            if resp_df is None or resp_df.empty:
-                print(f"[WARN] 需要呼吸段但未找到：{sid}_resp_w{wid}（将跳过 RSA 与个体化HF）")
-                resp_df = None
-                n_rsa_skipped_no_resp += 1
+        resp_df = _load_segment(sid, "resp", wid)
+        if resp_df is None or resp_df.empty:
+            print(f"[WARN] 需要呼吸段但未找到：{sid}_resp_w{wid}（将跳过 RSA 与个体化HF）")
+            resp_df = None
+            n_rsa_skipped_no_resp += 1
+
+        acc_df = _load_segment(sid, 'acc', wid)
+        if acc_df is None or acc_df.empty:
+            print(f"[WARN] 缺少 acc 段：{sid}_acc_w{wid}")
+            n_missing_acc += 1
+            continue
 
         # per-window metadata from collected_index (meaning, w_s, w_e)
         meta = idx[(idx["subject_id"] == sid) & (idx["w_id"] == wid)]
@@ -322,8 +336,16 @@ def main():
                 print(f"[WARN] RSA 特征失败 {sid}/w{wid}: {e}")
                 n_read_errors += 1
 
-        feat_df = pd.concat(feat_parts, axis=1) if feat_parts else pd.DataFrame()
+        if "acc" in rr_plan:
+            try:
+                # 优先使用显式 acc_df（保持与其它特征模块一致的接口）
+                feat_parts.append(f_acc.features_segment(acc_df=acc_df))
+                n_acc += 1
+            except Exception as e:
+                print(f"[WARN] ACC 特征失败 {sid}/w{wid}: {e}")
+                n_read_errors += 1
 
+        feat_df = pd.concat(feat_parts, axis=1) if feat_parts else pd.DataFrame()
         # per-window RR QC (minimal): rr_valid_ratio, rr_max_gap_s
         qc = _qc_rr_window(rr_df, meta_row.get("w_s", np.nan), meta_row.get("w_e", np.nan))
 
@@ -362,6 +384,7 @@ def main():
     print(f"  RSA 特征成功数: {n_rsa}")
     print(f"  RSA 跳过(无呼吸段)数: {n_rsa_skipped_no_resp}")
     print(f"  读取/计算错误数: {n_read_errors}")
+    print(f"  ACC 特征成功数: {n_acc}")
 
 
 if __name__ == "__main__":

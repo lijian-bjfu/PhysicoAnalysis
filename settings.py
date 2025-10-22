@@ -112,6 +112,14 @@ PARAMS = {
     # 设备 RR 与 ECG R 峰配对时的最近邻容差（毫秒）。仅用于 QC/可视化或后续扩展，
     # 不改变主要修复逻辑。
     "ecg_pair_tol_ms": 120.0,
+
+    # ---- parameters for hrv_acc.py & hrv_resp.py (added) ----- #
+    # 加速度：1 g 的数值（与原始单位一致）。你的样例是 ~±1000，显然单位为 mg，因此设 1000.0
+    "acc_g": 1000.0,
+
+    # ENMO 阈值（与原始单位一致，mg）。用于计算 acc_motion_frac（>阈值的占比）。
+    # 胸带/躯干 20–40 mg 常见；手腕/上肢可适当调高（如 40–60 mg）
+    "acc_enmo_thresh": 30.0,
 }
 
 DATASETS = {
@@ -304,6 +312,9 @@ DATASETS = {
             "resp_rate_bpm",
             # "n_breaths_used",
             # "rsa_method",
+            "acc",
+            "acc_enmo_mean",
+            "acc_motion_frac"
             ],
         "preview_sids": ["P002S001T001R001"], # 选择预览被试id
         "psycho_indices": [
@@ -425,8 +436,8 @@ SCHEMA = {
   "ecg":    {"t": "time_s",   "v":"value",    "fs":"fs_hz"},
   "resp":   {"t": "time_s",   "v": "value", "fs":"fs_hz"},
   "ppg":    {"t": "t_s",      "v": "value",   "fs":"fs_hz"},
-  # 三轴加速度
-  "acc":    {"t": "time_s",   "vx":"value_x", "vy":"value_y", "vz":"value_z"},
+  # 三轴加速度, 这里的 v 只是站位符，便于写代码
+  "acc":    {"t": "time_s",   "v": "value_x", "vx":"value_x", "vy":"value_y", "vz":"value_z"},
   # 事件标记
   "events": {"t": "time_s",   "label": "events"},
 }
