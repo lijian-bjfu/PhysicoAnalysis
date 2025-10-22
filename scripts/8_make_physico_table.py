@@ -20,7 +20,7 @@ def _paths() -> Tuple[Path, Path, Path]:
     paths = DS["paths"]
     dat_dir = (DATA_DIR / paths["features"]).resolve()
     grp_dir = (DATA_DIR / paths["groups"]).resolve()
-    out_root = (DATA_DIR / paths["final"]).resolve()
+    out_root = (DATA_DIR / paths["physico"]).resolve()
     out_root.mkdir(parents=True, exist_ok=True)
     return dat_dir, grp_dir, out_root
 
@@ -82,7 +82,7 @@ def main() -> None:
             print(f"[WARN] 分组列 '{col}' 有 {missing_count} 条缺失，涉及 {len(miss_ids)} 位被试：{miss_ids[:10]}{' ...' if len(miss_ids)>10 else ''}")
 
     # 写出
-    out_path = OUT_ROOT / "final.csv"
+    out_path = OUT_ROOT / "physico.csv"
     final.to_csv(out_path, index=False)
 
     # 报告

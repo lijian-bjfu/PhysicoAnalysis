@@ -132,15 +132,18 @@ DATASETS = {
             "preview":      "processed/preview/local",
             "windowing": "processed/windowing/local",  # 切窗
             "features":  "processed/features/local",   # 6x 特征输出
-            "final":    "processed/final/local",        # 最终的数据表
-            "events":    "raw/local/events"            # 原始事件标记（若有）
+            "physico":    "processed/physico/local",        # 最终的数据表
+            "events":    "raw/local/events",            # 原始事件标记（若有）
+            "psycho":    "psycho/local",  # 心理指标
+            "final":      "final/local",  # 合并心理与生理长表
         },
         # 分组信息。分组信息多数可以从sid中获取
         "groups": {
             "sample": "P001S001T001R001",
             # 切片法，指定哪几个字符是分组信息
             "group_map": {
-                "task": {"start": 3, "end": 4},
+                "task":    {"start": 9, "end": 12},
+                # "sub": {"start": 0, "end": 1},
                 # "session": {"start": 4, "end": 7},  # 左闭右开，0 起算
                 # "task":    {"start": 8, "end": 11},
                 # "run":     {"start": 12, "end": 15}
@@ -148,8 +151,8 @@ DATASETS = {
             # 为各组赋值
             "value": {
                 "task":{
-                    "2": 1,
-                    "3": 2,
+                    "001": 1,
+                    "002": 2,
                 },
                 # "session":{
                 #     "001": 1,
@@ -170,8 +173,10 @@ DATASETS = {
         # windowing 下必需配置的两项：use, method
         "windowing":{
             # 说明：这里仅定义“切窗策略的配置”，真正执行在 4_windowing.py
-            "use": "events_offset",  # 默认切窗方法，可选：events / single / sliding / events_offset /events_single / events_sliding / single_sliding
 
+            # 默认切窗方法，可选：events / single / sliding / events_offset / events_labeled_windows
+            # events_single / events_sliding / single_slidin
+            "use": "events_labeled_windows",  
             # 切窗方法。包括 cover 和 subdivide 两种。cover 重新切窗覆盖之前的数据，subdivide 选择一段数据切窗
             "method": "cover", # cover | subdivide
 
@@ -212,7 +217,7 @@ DATASETS = {
                     # 事件文件路径
                     "events_path": "processed/norm/local",
                     # 偏移设定
-                    "offset": {
+                    "inset": {
                         # 窗号:偏移值。窗号根据 events 定义，值由用户设定。
                         # 1:30 表示第一个窗向两头内缩进 30s
                         "1": 30,
@@ -220,7 +225,38 @@ DATASETS = {
                     },
                 },
 
-                # 5) 事件 + 单段：以事件为锚，局部切一个窗口
+                # 5) 基于事件顺序与标签的精确切窗，外加偏移量
+                "events_labeled_windows": {
+                    "events_path": "processed/norm/local",
+                    "windows": [
+                        {
+                            "name": "baseline",
+                            "start_event": "baseline_start",
+                            "end_event": "custom_event",
+                            "inset": 30
+                        },
+                        {
+                            "name": "induction",
+                            "start_event": "stim_start",
+                            "end_event": "stim_end",
+                            "inset": 30
+                        },
+                        {
+                            "name": "intervention",
+                            "start_event": "intervention_start",
+                            "end_event": "intervention_end",
+                            "inset": 30
+                        },
+                        {
+                            "name": "recovery",
+                            "start_event": "custom_event", 
+                            "end_event": "stop",
+                            "inset": 30
+                        }
+                    ]
+                },
+
+                # 6) 事件 + 单段：以事件为锚，局部切一个窗口
                 "events_single": {
                     "events_path": "processed/norm/local",
                     "anchor_event": "stim_start",   # 选此模式，此项必填；None 则报错
@@ -228,7 +264,7 @@ DATASETS = {
                     "win_len_s": None
                 },
 
-                # 6) 事件 + 滑窗：在某个事件区间内滑窗
+                # 7) 事件 + 滑窗：在某个事件区间内滑窗
                 "events_sliding": {
                     "events_path": "processed/norm/local",
                     "segment": ["intervention_start","intervention_end"],  # 必填：事件名对
@@ -269,7 +305,13 @@ DATASETS = {
             # "n_breaths_used",
             # "rsa_method",
             ],
-        "preview_sids": ["P002S001T001R001"] # 选择预览被试id
+        "preview_sids": ["P002S001T001R001"], # 选择预览被试id
+        "psycho_indices": [
+            "t0_stai",
+            "t1_stai",
+            "t2_stai",
+            "flow",
+        ]
     },
     "fantasia": {
         "loader": "scripts.loaders.fantasia_loader",
@@ -438,12 +480,15 @@ RR_REVIEW_LABELS = {
 }
 
 # final.csv 输出列说明
-FINAL_LABELS = {
+PHYSICO_LABELS = {
     "subject_id": "被试唯一标识（字符串，例如 'sub-0001'）",
     "w_id": "窗口编号/序号",
     "w_s": "窗口开始时间，基于绝对值，第一个窗口开始时间为0",
     "w_e": "窗口开始时间，基于绝对值",
+    "meaning": "窗口含义，通常来自事件标签",
+    "hf_ms2": "",
     "hf_log_ms2": "HF功率自然对数 ln(ms²)",
+    "lf_ms2": "",
     "lf_log_ms2": "LF功率自然对数 ln(ms²)",
     "mean_hr_bpm": "平均心率（次/分）",
     "rmssd_ms": "RMSSD（毫秒）",
@@ -455,5 +500,5 @@ FINAL_LABELS = {
     "resp_rate_bpm": "呼吸频率（次/分；缺失则留空）",
     "rr_valid_ratio": "有效RR占比（0–1；≥0.80 推荐有效）",
     "rr_max_gap_s": "显示因时间轴缺口/掉峰造成的超长 RR",
-    "group": "对照组",
+    "task": "对照组",
 }

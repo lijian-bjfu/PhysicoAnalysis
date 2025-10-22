@@ -368,13 +368,13 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
         if n_ev < 2:
             raise SystemExit(f"[error] {sid}：events_offset 模式需要至少 2 个事件。实际仅 {n_ev} 个。")
 
-        offsets = m.get("offset", {})
+        offsets = m.get("inset", {})
         # 事件数与偏移数关系：只要求  (事件数-1) > 偏移数
         # 即，事件间隔应多于要应用偏移的窗口数；随后仅使用前 K=len(offsets) 个相邻事件间隔。
         W_all = n_ev - 1                         # 可形成的总窗口数
         K = len(offsets)                         # 研究者指定的偏移数量
         if K <= 0:
-            raise SystemExit(f"[error] {sid}：events_offset.offset 未设置或为空。")
+            raise SystemExit(f"[error] {sid}：events_offset.inset 未设置或为空。")
         if W_all <= K:
             raise SystemExit(
                 f"[error] {sid}：事件数量不足：有 {n_ev} 个事件，可形成 {W_all} 个相邻窗；"
@@ -399,6 +399,87 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
             e_adj = e - d
             # 落盘逻辑（反序/最小时长）沿用 add_win 的统一校验
             add_win(s_adj, e_adj, f"事件{i+1}内缩{offsets.get(str(i+1))}s")
+
+    elif mode == "events_labeled_windows":
+        # 基于 "start_event" 和 "end_event" 标签对来显式定义窗口，
+        # 并对每个窗口应用 "inset" 内缩。
+        # 这个模式解决了 events_offset 模式的两个问题：
+        # 1. 它只切我们明确定义的窗口（如 baseline, induction, intervention），自动忽略中间的"垃圾"窗口（如问卷）。
+        # 2. 它通过查找特定的 "end_event" 标签，可以正确处理点击组在干预窗内插入了多个 custom_event 的情况。
+        
+        m = wcfg["modes"].get("events_labeled_windows", {})
+        
+        # --- [加载事件文件的模板代码] ---
+        # 事件文件路径优先使用本模式的 events_path
+        events_dir = (DATA_DIR / m.get("events_path", "")).resolve()
+        ev = load_events_for_sid(cfg, sid, prefer_dir=events_dir)
+        if ev is None or ev.empty:
+            raise SystemExit(f"[error] {sid}：events_labeled_windows 模式需要事件表，但在 {events_dir} 未找到 {sid}_events.csv 或 .parquet")
+        # 确保事件按时间排序，这是我们"前向查找"逻辑的基础
+        ev = ev.sort_values("time_s").reset_index(drop=True)
+
+        # --- 核心逻辑 ---
+        
+        # 1. 从配置中获取我们想要处理的窗口定义列表
+        windows_to_process = m.get("windows", [])
+        if not windows_to_process or not isinstance(windows_to_process, list):
+            raise SystemExit(f"[error] {sid}：events_labeled_windows.windows 配置未设置、为空或不是一个列表。")
+
+        # 2. 初始化一个"搜索指针"
+        # 这个指针记录了上一个窗口的结束时间，以确保我们总是在时间轴上"向前"搜索，
+        # 这对于处理重名标签（如 custom_event）至关重要。
+        last_search_time_s = -float('inf') 
+
+        # 3. 按顺序遍历配置中定义的每一个窗口
+        for win_def in windows_to_process:
+            if not isinstance(win_def, dict):
+                raise SystemExit(f"[error] {sid}：windows 列表中的项必须是字典，但找到了 {win_def}")
+
+            # 4. 解析当前窗口的定义
+            name = win_def.get("name")
+            start_label = win_def.get("start_event")
+            end_label = win_def.get("end_event")
+            # 默认内缩为 0
+            inset = float(win_def.get("inset", 0.0))
+
+            # 验证配置是否完整
+            if not all([name, start_label, end_label]):
+                raise SystemExit(f"[error] {sid}：窗口定义 {win_def} 缺少 'name', 'start_event', 或 'end_event' 键。")
+
+            # 5. 查找开始事件 (Start Event)
+            # 核心逻辑：我们从 "last_search_time_s" 之后开始搜索，
+            # 寻找第一个匹配 "start_label" 的事件。
+            start_search_mask = (ev["events"] == start_label) & (ev["time_s"] >= last_search_time_s)
+            start_row = ev[start_search_mask].iloc[0:1] # .iloc[0:1] 确保没找到时返回空DF而不报错
+
+            if start_row.empty:
+                raise SystemExit(f"[error] {sid}：(窗口 '{name}')：未能在 {last_search_time_s}s 后找到开始事件 '{start_label}'。")
+            
+            t_start = float(start_row["time_s"].iloc[0])
+
+            # 6. 查找结束事件 (End Event)
+            # 核心逻辑：我们从 "t_start" 之后开始搜索 (注意：不是 last_search_time_s)，
+            # 寻找第一个匹配 "end_label" 的事件。
+            end_search_mask = (ev["events"] == end_label) & (ev["time_s"] > t_start)
+            end_row = ev[end_search_mask].iloc[0:1]
+
+            if end_row.empty:
+                raise SystemExit(f"[error] {sid}：(窗口 '{name}')：未能在 {t_start}s (事件 '{start_label}') 后找到结束事件 '{end_label}'。")
+
+            t_end = float(end_row["time_s"].iloc[0])
+            
+            # 7. 应用偏移（内缩）并添加窗口
+            s_adj = t_start + inset
+            e_adj = t_end - inset
+            
+            # 使用一个清晰的名称调用 add_win
+            win_name_with_info = f"{name} (内缩{inset}s)"
+            add_win(s_adj, e_adj, win_name_with_info)
+            
+            # 8. 更新"搜索指针"
+            # 我们将指针移动到当前窗口的结束时间，
+            # 确保下一个循环会从这个时间点之后开始搜索。
+            last_search_time_s = t_end
 
     elif mode == "events_single":
         m = wcfg["modes"]["events_single"]

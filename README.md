@@ -67,6 +67,8 @@ local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文
 
 `use`设置切窗策略，可选策略包括根据事件信息切窗、切单窗、滑窗、事件+单窗、事件+滑窗、单窗+滑窗，(events / single / sliding / events_offset / events_sliding / single_sliding) 共6种。使用 events 切窗需要事件表，在 `events_path`下设置路径。开始时间为相对位置，例如start_s 设置为12，会从数据12秒的位置作为切窗开始位置。
 
+推荐使用 `events_labeled_windows` 方法。该方法根据顺序与事件名来精确定义窗口。用户根据 events 列表中的事件顺序，在settings中逐一写下每窗的起始事件标签。
+
 ## 整理切窗数据
 
 操作方法：`5b_collect_windowing.py
@@ -78,3 +80,27 @@ local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文
 操作方法：`6_gather_features.py`
 
 该脚本调用scripts/features/下的计算时域、频域和 RSA 的API 对各窗数据计算相应的指标。形成一个长表。
+
+## 生成实验组编号
+
+操作方法：`7_group_by_sid.py`
+
+根据数据名来推断实验组。在 local 数据中，文件名的前缀为 P002S001T001R001 的格式。在settings 中标注 "groups" 的识别方式，指明哪个字符到哪个字符为实验组的信息。例如 "task":    {"start": 9, "end": 12} 则表示 T 后面的 001 为实验组信息。在 "value" 中标注不同字段所表示的组号。
+
+生成的信息保存在 data/groups中
+
+## 合成生理指标长表
+
+操作方法：`8_make_phyco_table.py`
+
+该脚本将 `7_group_by_sid.py`生成的分组号信息加入到 `6_gather_features.py` 生成的数据里。生成final表
+
+生成的信息保存在 data/processed/final下
+
+## 构建心理指标宽表
+
+操作方法：`9_collect_psycho.py`
+
+该脚本构建心理指标宽表。在使用该脚本前，需要分别将各时间段的心理测量结果保存为 t0.csv, t1.csv, t2.csv 等格式，设定好心理指标名称，时间性测量指标要加入 `t0_` 的前缀，比如基线、诱导和干预三个阶段的状态焦虑指标为 t0_stai, t1_stai, t2_stai。非时间性指标不要加前缀。将所有 csv 放在同一个文件夹下。
+
+在 settings 中 "psycho_indices" 列出程序需要调用的指标。程序运行后会跳出系统窗口，可交互式地指定csv所在路径。
