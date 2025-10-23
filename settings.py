@@ -314,7 +314,14 @@ DATASETS = {
             # "rsa_method",
             "acc",
             "acc_enmo_mean",
-            "acc_motion_frac"
+            "acc_motion_frac",
+            # —— 去中心化列 —— 
+            "acc_enmo_mean_ws",
+            "acc_motion_frac_ws",
+            "resp_rate_bpm_ws",
+            "acc_enmo_mean_bs",
+            "acc_motion_frac_bs",
+            "resp_rate_bpm_bs",
             ],
         "preview_sids": ["P002S001T001R001"], # 选择预览被试id
         "psycho_indices": [

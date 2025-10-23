@@ -125,6 +125,22 @@ def _load_segment(sid: str, sig: str, wid: int) -> Optional[pd.DataFrame]:
         print(f"[WARN] 读取失败：{fpath.name} -> {e}")
         return None
 
+# --- 对数据进行去中心化处理 -------------------------------------------------
+def add_within_between_centering(df, id_col="subject_id", cols=None, add_between=False):
+    """
+    在 df 上追加被试内去中心化列（_ws），可选追加被试间均值列（_bs）。
+    不修改原始列。
+    """
+    if not cols:
+        return df
+    out = df.copy()
+    g = out.groupby(id_col)
+    for col in cols:
+        subj_mean = g[col].transform("mean")          # 被试 i 的均值 \bar X_{i·}
+        out[f"{col}_ws"] = out[col] - subj_mean       # within-subject centered
+        if add_between:
+            out[f"{col}_bs"] = subj_mean             # between-subject mean（可选）
+    return out
 
 # --- RR window QC (minimal) -------------------------------------------------
 def _qc_rr_window(rr_df: pd.DataFrame, w_s: Optional[float], w_e: Optional[float]) -> Dict[str, Optional[float]]:
@@ -369,6 +385,11 @@ def main():
         n_rows += 1
 
     out_df = pd.DataFrame(rows)
+
+    #---- 对acc 与 resp 去中心化，这两个指标主要用于协变量
+    targets = [c for c in ["acc_enmo_mean","acc_motion_frac","resp_rate_bpm"] if c in out_df.columns]
+    out_df = add_within_between_centering(out_df, id_col="subject_id", cols=targets, add_between=True)
+
     out_path = OUT_ROOT / "physico_features.csv"
     out_df.to_csv(out_path, index=False)
     print(f"[OK] 写出特征表: {out_path}  共 {len(out_df)} 行 × {out_df.shape[1]} 列")

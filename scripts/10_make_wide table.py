@@ -25,6 +25,10 @@ OUT_ROOT     = (DATA_DIR / paths["final"]).resolve()
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
 OUT_FILE = OUT_ROOT / "wide_table.csv"
 
+# ----- 重要！------ #
+# 最终宽表中的生理指标变量名字必须预先在settings.signal_features 注册，
+# 否则无法出现在最终宽表中
+
 # 列名配置（来自 settings）
 PHYSICO_COLUMNS: List[str] = DS.get("signal_features", []) or []
 PSYCHO_COLUMNS:  List[str] = DS.get("psycho_indices", []) or []
@@ -69,6 +73,7 @@ def _load_physico(path: Path) -> pd.DataFrame:
     """
     must_have = {"subject_id", "w_id"}
     desired = set(PHYSICO_COLUMNS) | must_have | {"task", "group", "meaning"}
+    # print(f'[load physico] 生理指标注册变量为 {desired}')
     return pd.read_csv(path, usecols=lambda c: c in desired)
 
 
@@ -115,11 +120,27 @@ def _pivot_physio_no_agg(phy: pd.DataFrame) -> pd.DataFrame:
     sid_map = df.groupby("_merge_id")["subject_id"].first()
 
     # 数值列：优先 settings.signal_features；否则用所有数值列
+    numeric_cols = set(df.select_dtypes(include=[np.number]).columns) - {"w_id"}
     if PHYSICO_COLUMNS:
-        value_cols = [c for c in PHYSICO_COLUMNS
-                      if c not in {"subject_id", "w_id", "task", "group", "meaning"} and c in df.columns]
+        # 将 settings 中的条目视作“基础名”（family），自动扩展其 _ws/_bs 派生列
+        requested = [c for c in PHYSICO_COLUMNS if c not in {"subject_id", "w_id", "task", "group", "meaning"}]
+        expanded: set[str] = set()
+        for base in requested:
+            # 1) 直接同名（显式列）
+            if base in numeric_cols:
+                expanded.add(base)
+            # 2) 若 base 是“基础名”，则尝试附加 _ws/_bs
+            for suf in ("_ws", "_bs"):
+                cand = f"{base}{suf}"
+                if cand in numeric_cols:
+                    expanded.add(cand)
+        # 3) 若 settings 已直接写入某个派生名（例如直接写了 xxx_ws），也别遗漏
+        for c in requested:
+            if c in numeric_cols:
+                expanded.add(c)
+        value_cols = sorted(expanded)
     else:
-        value_cols = [c for c in df.select_dtypes(include=[np.number]).columns if c != "w_id"]
+        value_cols = sorted(numeric_cols)
 
     if not value_cols:
         raise ValueError("physico.csv 未检测到可透视的数值列（请检查 settings.signal_features 或文件列名）。")
@@ -245,6 +266,10 @@ def main() -> None:
     wide = build_wide_table()
     wide.to_csv(OUT_FILE, index=False)
     print(f"[ok] 写出宽表：{OUT_FILE}")
+    print("[PREVIEW] 所有列名：")
+    print(wide.columns)
+    print("[PREVIEW] 最前 5 行：")
+    print(wide.head())
 
 
 if __name__ == "__main__":

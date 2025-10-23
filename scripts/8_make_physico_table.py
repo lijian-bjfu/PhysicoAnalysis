@@ -88,6 +88,8 @@ def main() -> None:
     # 报告
     print(f"[OK] 合并完成：{before_rows} → {len(final)} 行，列数 {final.shape[1]}，合并分组列: {group_cols}")
     print(f"[OK] 已写出: {out_path}")
+    print("[PREVIEW] 所有列名：")
+    print(final.columns)
     print("[PREVIEW] 最前 5 行：")
     print(final.head())
 
