@@ -28,6 +28,8 @@ RSA（窦性呼吸性心律不齐）特征（单段 RR）
 - rsa_ms            : RSA（毫秒），按每一呼吸周期的 (max RR - min RR) 取平均；若无足够呼吸周期则 NaN
 - resp_rate_bpm     : 本段估计的平均呼吸频率（次/分）；无呼吸或不足则 NaN
 - n_breaths_used    : 计入 RSA 计算的呼吸周期数量
+- resp_amp         : 呼吸振幅（每个呼吸周期的峰-谷差的聚合，单位为原始呼吸信号幅值；无有效周期则 NaN)
+- resp_log_amp     : 呼吸振幅的自然对数 ln(resp_amp)；若 ≤0 或 NaN 则返回 NaN
 - rsa_method        : 'peak_to_valley' 或 'unavailable'
 
 说明：
@@ -59,6 +61,32 @@ def _estimate_resp_rate_from_peaks(t_s: np.ndarray, peaks_idx: np.ndarray) -> fl
     return 60.0 / float(np.median(periods))
 
 
+def _compute_resp_amp(t_resp: np.ndarray, x_resp: np.ndarray, peaks_idx: np.ndarray, agg: str = 'median') -> float:
+    """
+    计算呼吸振幅（单位=原始呼吸信号幅值）。定义为：
+    在相邻两个呼吸峰之间，取该区间内的信号最大值减最小值（peak-to-trough）作为该周期振幅，
+    对所有有效周期做聚合（median 或 mean）。若无有效周期返回 NaN。
+    """
+    if peaks_idx.size < 2:
+        return np.nan
+    amps = []
+    for i in range(peaks_idx.size - 1):
+        p0, p1 = peaks_idx[i], peaks_idx[i + 1]
+        # 取两个峰之间的原始信号段
+        seg = x_resp[p0:p1 + 1]
+        if seg.size == 0 or not np.isfinite(seg).any():
+            continue
+        a = float(np.nanmax(seg) - np.nanmin(seg))
+        amps.append(a)
+    if not amps:
+        return np.nan
+    amps = np.array(amps, dtype=float)
+    if agg == 'mean':
+        return float(np.nanmean(amps))
+    else:
+        return float(np.nanmedian(amps))
+
+
 # ---------- 公共 API ----------
 
 def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
@@ -85,6 +113,9 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
     if resp_df is None or resp_df.empty or ('t_s' not in resp_df or 'resp' not in resp_df):
         return pd.DataFrame([{
             'rsa_ms': np.nan,
+            'rsa_log_ms': np.nan,
+            'resp_amp': np.nan,
+            'resp_log_amp': np.nan,
             'resp_rate_bpm': np.nan,
             'n_breaths_used': 0,
             'rsa_method': 'unavailable'
@@ -93,6 +124,9 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
     if rr_df is None or rr_df.empty or ('rr_ms' not in rr_df):
         return pd.DataFrame([{
             'rsa_ms': np.nan,
+            'rsa_log_ms': np.nan,
+            'resp_amp': np.nan,
+            'resp_log_amp': np.nan,
             'resp_rate_bpm': np.nan,
             'n_breaths_used': 0,
             'rsa_method': 'unavailable'
@@ -109,6 +143,9 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
     if t_resp.size < 3:
         return pd.DataFrame([{
             'rsa_ms': np.nan,
+            'rsa_log_ms': np.nan,
+            'resp_amp': np.nan,
+            'resp_log_amp': np.nan,
             'resp_rate_bpm': np.nan,
             'n_breaths_used': 0,
             'rsa_method': 'unavailable'
@@ -119,6 +156,9 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
     if not np.isfinite(dt) or dt <= 0:
         return pd.DataFrame([{
             'rsa_ms': np.nan,
+            'rsa_log_ms': np.nan,
+            'resp_amp': np.nan,
+            'resp_log_amp': np.nan,
             'resp_rate_bpm': np.nan,
             'n_breaths_used': 0,
             'rsa_method': 'unavailable'
@@ -187,6 +227,9 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
         base_peaks = peaks_pos if peaks_pos.size >= peaks_neg.size else peaks_neg
         return pd.DataFrame([{
             'rsa_ms': np.nan,
+            'rsa_log_ms': np.nan,
+            'resp_amp': np.nan,
+            'resp_log_amp': np.nan,
             'resp_rate_bpm': _estimate_resp_rate_from_peaks(t_resp, base_peaks) if base_peaks.size >= 2 else np.nan,
             'n_breaths_used': 0,
             'rsa_method': 'unavailable'
@@ -198,6 +241,9 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
     if rr.size == 0:
         return pd.DataFrame([{
             'rsa_ms': np.nan,
+            'rsa_log_ms': np.nan,
+            'resp_amp': np.nan,
+            'resp_log_amp': np.nan,
             'resp_rate_bpm': _estimate_resp_rate_from_peaks(t_resp, valid_peaks) if valid_peaks.size >= 2 else np.nan,
             'n_breaths_used': 0,
             'rsa_method': 'unavailable'
@@ -219,6 +265,9 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
     if breath_count == 0:
         return pd.DataFrame([{
             'rsa_ms': np.nan,
+            'rsa_log_ms': np.nan,
+            'resp_amp': np.nan,
+            'resp_log_amp': np.nan,
             'resp_rate_bpm': _estimate_resp_rate_from_peaks(t_resp, valid_peaks) if valid_peaks.size >= 2 else np.nan,
             'n_breaths_used': 0,
             'rsa_method': 'unavailable'
@@ -230,10 +279,20 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
     else:
         rsa_ms = float(np.mean(rsa_values))
 
+    rsa_log_ms = np.log(rsa_ms) if (rsa_ms is not None and np.isfinite(rsa_ms) and rsa_ms > 0) else np.nan
+
+    # 呼吸振幅：相邻两个呼吸峰之间的 peak-to-trough 振幅的聚合
+    resp_amp = _compute_resp_amp(t_resp, x_resp, valid_peaks, agg=rsa_agg)
+    # 对数振幅：自然对数，非正值与缺失返回 NaN
+    resp_log_amp = np.log(resp_amp) if (resp_amp is not None and np.isfinite(resp_amp) and resp_amp > 0) else np.nan
+
     resp_rate_bpm = _estimate_resp_rate_from_peaks(t_resp, valid_peaks)
 
     return pd.DataFrame([{
         'rsa_ms': rsa_ms,
+        'rsa_log_ms': rsa_log_ms,
+        'resp_amp': resp_amp,
+        'resp_log_amp': resp_log_amp,
         'resp_rate_bpm': resp_rate_bpm,
         'n_breaths_used': int(breath_count),
         'rsa_method': 'peak_to_valley'
@@ -241,4 +300,4 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
 
 
 if __name__ == '__main__':
-    print('features_segment(rr_df, resp_df=None) -> DataFrame[1 x 4] (rsa_ms, resp_rate_bpm, n_breaths_used, rsa_method)')
+    print('features_segment(rr_df, resp_df=None) -> DataFrame[1 x 7] (rsa_ms, rsa_log_ms, resp_amp, resp_log_amp, resp_rate_bpm, n_breaths_used, rsa_method)')

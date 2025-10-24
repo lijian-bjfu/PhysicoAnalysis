@@ -93,7 +93,7 @@ def parse_psycho_indices(psycho_indices: list):
             print("    所有时间性指标必须在相同的时间点测量。", file=sys.stderr)
             return None, None, None, None
     
-    # 3. 应用你的排序和验证规则
+    # 3. 应用排序和验证规则
     # expected_prefixes 现在是 {'t0', 't1', 't2'}
     
     # "如果三个数字完全相同则报错"

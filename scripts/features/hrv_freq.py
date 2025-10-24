@@ -6,8 +6,7 @@
 # - 输入：
 #     RR 段 DataFrame，列名 ['t_s','rr_ms']（已完成伪迹处理的 NN 间期；时间单位秒，RR 单位毫秒）；
 #     可选：与该 RR 段对齐的呼吸 DataFrame，列名 ['t_s','resp']；
-# - 输出：单行 DataFrame，列名 ['hf_log_ms2','lf_log_ms2','hf_band_used','hf_center_hz']；
-#         若 log_power=False，则返回 ['hf_ms2','lf_ms2', ...]（未取对数）。
+# - 输出：单行 DataFrame，列名 ['hf_ms2','hf_log_ms2','lf_ms2','lf_log_ms2','hf_band_used','hf_center_hz']；
 
 import pandas as pd
 import numpy as np
@@ -91,29 +90,26 @@ def features_segment(rr_df: pd.DataFrame,
     说明：RR 间期序列本身**没有采样率**；本函数会从 PARAMS 读取 `fs_interp`（默认 4 Hz），
     仅用于将不等间隔 RR 插值到**等间隔的心动间期序列**，以便进行 Welch 频谱估计。这是频域 HRV 的常规做法。
 
-    返回：
-    单行 DataFrame：
-      当 log_power=True：['hf_log_ms2','lf_log_ms2','hf_band_used','hf_center_hz']；
-      当 log_power=False：['hf_ms2','lf_ms2','hf_band_used','hf_center_hz']。
+    返回：['hf_ms2','hf_log_ms2','lf_ms2','lf_log_ms2','hf_band_used','hf_center_hz']；
     """
     # Read all knobs from PARAMS (单一真相源)
     fs_interp = float(PARAMS.get("fs_interp", 4.0))
     hf_fixed_lo, hf_fixed_hi = PARAMS.get("hf_band", (0.15, 0.40))
     use_individual = bool(PARAMS.get("use_individual_hf", False))
     rad = float(PARAMS.get("hf_band_radius_hz", 0.05))
-    do_log = bool(PARAMS.get("log_power", True))
 
     # Check rr_df size
     if rr_df.empty or rr_df["rr_ms"].size < 3:
         # Not enough data to compute
-        if do_log:
-            return pd.DataFrame([{"hf_log_ms2": np.nan, "lf_log_ms2": np.nan, "hf_band_used": "fixed", "hf_center_hz": np.nan}])
-        else:
-            return pd.DataFrame([{"hf_ms2": np.nan, "lf_ms2": np.nan, "hf_band_used": "fixed", "hf_center_hz": np.nan}])
+        return pd.DataFrame([{"hf_ms2": np.nan, "hf_log_ms2": np.nan, "lf_ms2": np.nan, "lf_log_ms2": np.nan, "hf_band_used": "fixed", "hf_center_hz": np.nan}])
 
     # Interpolate RR tachogram
     _, rr_interp = _interpolate_rr(rr_df["rr_ms"].to_numpy(dtype=float), fs_interp=fs_interp)
     f, pxx = _welch_psd(rr_interp, fs_interp=fs_interp)
+
+    # Defaults for band metadata
+    band_used = "fixed"
+    hf_center = np.nan
 
     # HF band selection（等宽滑移：在固定 HF 内保持恒定带宽 2*rad）
     if use_individual and (resp_df is not None) and (resp_df.shape[0] > 0):
@@ -144,30 +140,29 @@ def features_segment(rr_df: pd.DataFrame,
         else:
             # f0 不在固定 HF 内或不可得：退回固定带宽
             lo, hi = hf_fixed_lo, hf_fixed_hi
+            band_used = "fixed"
+            hf_center = np.nan
     else:
         lo, hi = hf_fixed_lo, hf_fixed_hi
 
     hf_power = _band_power(f, pxx, lo, hi)
     lf_power = _band_power(f, pxx, 0.04, 0.15)
 
-    # log-transform; guard against non-positive
-    if do_log:
-        hf_val = np.log(hf_power) if (hf_power is not None and hf_power > 0) else np.nan
-        lf_val = np.log(lf_power) if (lf_power is not None and lf_power > 0) else np.nan
-        out = {
-            "hf_log_ms2": hf_val,
-            "lf_log_ms2": lf_val,
-            "hf_band_used": band_used,
-            "hf_center_hz": hf_center
-        }
-    else:
-        out = {
-            "hf_ms2": hf_power,
-            "lf_ms2": lf_power,
-            "hf_band_used": band_used,
-            "hf_center_hz": hf_center
-        }
+    # Always compute and return both raw and log powers
+    # Guard against non-positive/NaN values for logs
+    hf_raw = float(hf_power) if (hf_power is not None and np.isfinite(hf_power)) else np.nan
+    lf_raw = float(lf_power) if (lf_power is not None and np.isfinite(lf_power)) else np.nan
+    hf_log = np.log(hf_raw) if (hf_raw is not None and hf_raw > 0) else np.nan
+    lf_log = np.log(lf_raw) if (lf_raw is not None and lf_raw > 0) else np.nan
 
+    out = {
+        "hf_ms2": hf_raw,
+        "lf_ms2": lf_raw,
+        "hf_log_ms2": hf_log,
+        "lf_log_ms2": lf_log,
+        "hf_band_used": band_used,
+        "hf_center_hz": hf_center
+    }
     return pd.DataFrame([out])
 
 if __name__ == "__main__":

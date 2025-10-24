@@ -40,8 +40,6 @@ PARAMS = {
     "use_individual_hf": True, 
     # 结合呼吸的个性化 hf 的半径（Hz），0.05 表示呼吸峰±0.05。此参数用于调整带宽的跨度。
     "hf_band_radius_hz": 0.05,
-    # 是否对 hrv lf, hf 进行对数化操作（ln ms²），默认打开
-    "log_power": True,
 
     # —— RSA 窦性呼吸性心律不齐口径（供 hrv_rsa 使用） ——
     # RSA 前是否把该段呼吸时间重置为0，只影响 RSA 模块
@@ -179,9 +177,7 @@ DATASETS = {
             "use": ["task",],
         },
         # windowing 下必需配置的两项：use, method
-        "windowing":{
-            # 说明：这里仅定义“切窗策略的配置”，真正执行在 4_windowing.py
-
+        "windowing":{    # 说明：这里仅定义“切窗策略的配置”，执行在 4_windowing.py
             # 默认切窗方法，可选：events / single / sliding / events_offset / events_labeled_windows
             # events_single / events_sliding / single_slidin
             "use": "events_labeled_windows",  
@@ -196,14 +192,15 @@ DATASETS = {
                 # 1) 事件整段：按事件配对切段；不需要窗长
                 "events": {
                     "events_path": "processed/norm/local",    # 事件文件路径；None 表示不支持
-                    "events_dict": {
-                        1: "baseline_start",
-                        2: "stim_start",
-                        3: "stim_end",
-                        4: "intervention_start",
-                        5: "intervention_end",
-                        6: "stop"
-                    },
+                    "events_name": [
+                        "baseline",
+                        "t1",
+                        "stim",
+                        "t2",
+                        "intervention",
+                        "t3",
+                        "stop"
+                    ],
                 },
 
                 # 2) 单段：按绝对时间或锚点切一个段
@@ -236,30 +233,46 @@ DATASETS = {
                 # 5) 基于事件顺序与标签的精确切窗，外加偏移量
                 "events_labeled_windows": {
                     "events_path": "processed/norm/local",
+                    # 两个时间维度，p 表示phase, g 表示 gap
+                    "window_category": ["p","g"], 
+                    # 心理测量的时间点是哪个
+                    "psycho_time": "g",
                     "windows": [
                         {
-                            "name": "baseline",
+                            "name": "p_baseline",
                             "start_event": "baseline_start",
                             "end_event": "custom_event",
                             "inset": 30
                         },
                         {
-                            "name": "induction",
+                            "name": "g_t1",
+                            "start_event": "custom_event",
+                            "end_event": "stim_start",
+                            "inset": 2
+                        },
+                        {
+                            "name": "p_induction",
                             "start_event": "stim_start",
                             "end_event": "stim_end",
                             "inset": 30
                         },
                         {
-                            "name": "intervention",
+                            "name": "g_t2",
+                            "start_event": "stim_end",
+                            "end_event": "intervention_start",
+                            "inset": 2
+                        },
+                        {
+                            "name": "p_intervention",
                             "start_event": "intervention_start",
                             "end_event": "intervention_end",
                             "inset": 30
                         },
                         {
-                            "name": "recovery",
-                            "start_event": "custom_event", 
+                            "name": "g_recovery",
+                            "start_event": "intervention_end",
                             "end_event": "stop",
-                            "inset": 30
+                            "inset": 5
                         }
                     ]
                 },
@@ -291,7 +304,7 @@ DATASETS = {
                 "single_sliding": "range[{s:.1f},{e:.1f}] / {w:.0f}/{step:.0f}"
             },
         },
-        # 输出参数
+        # 输出参数，输出的生理指标必须现在此处注册
         "signal_features": [
             # -- 频域特征
             "hf_ms2", 
@@ -303,16 +316,19 @@ DATASETS = {
             # -- 时域特征
             "mean_hr_bpm",
             "rmssd_ms",
-            "sdnn_ms",
-            "pnn50_pct",
-            "sd1_ms",
-            "sd2_ms",
+            # "sdnn_ms",
+            # "pnn50_pct",
+            # "sd1_ms",
+            # "sd2_ms",
             # rsa 特征
             "rsa_ms",
+            "rsa_log_ms",
+            "resp_amp",
+            "resp_log_amp",
             "resp_rate_bpm",
             # "n_breaths_used",
             # "rsa_method",
-            "acc",
+            # -- 运动 acc",
             "acc_enmo_mean",
             "acc_motion_frac",
             # —— 去中心化列 —— 

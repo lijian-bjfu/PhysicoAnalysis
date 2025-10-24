@@ -91,11 +91,11 @@ local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文
 
 ## 合成生理指标长表
 
-操作方法：`8_make_phyco_table.py`
+操作方法：`8_make_physico_table.py`
 
-该脚本将 `7_group_by_sid.py`生成的分组号信息加入到 `6_gather_features.py` 生成的数据里。生成final表
+该脚本将 `7_group_by_sid.py`生成的分组号信息加入到 `6_gather_features.py` 生成的数据里。生成最终的生理数据 physico 表，该表可用于spss 的混合线性模型分析。
 
-生成的信息保存在 data/processed/final下
+生成的信息保存在 data/processed/physico/physico.csv
 
 ## 构建心理指标宽表
 
@@ -103,4 +103,30 @@ local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文
 
 该脚本构建心理指标宽表。在使用该脚本前，需要分别将各时间段的心理测量结果保存为 t0.csv, t1.csv, t2.csv 等格式，设定好心理指标名称，时间性测量指标要加入 `t0_` 的前缀，比如基线、诱导和干预三个阶段的状态焦虑指标为 t0_stai, t1_stai, t2_stai。非时间性指标不要加前缀。将所有 csv 放在同一个文件夹下。
 
-在 settings 中 "psycho_indices" 列出程序需要调用的指标。程序运行后会跳出系统窗口，可交互式地指定csv所在路径。
+在 settings 中 "psycho_indices" 列出程序需要调用的指标。程序运行后会跳出系统窗口，可交互式地指定csv所在路径。生成心理指标表
+
+生成的信息保存在 data/psycho/psycho.csv
+
+## 建立宽表
+
+操作方法：`10_make_wide_table.py`
+
+该脚本把 physico 和 psycho 两个表拼合，并按照时间维度展开，形成宽表。该表主要用于 spss 重复方差分析。
+
+生成的信息保存在 data/final/wide_table.csv
+
+# 复杂切窗数据的宽表与长表
+
+操作方法：`11_make_ELW_table.py`
+
+该脚本针对包含测试中与测试后的复杂切窗模型设计的。专门用于对使用 settings 中 events_labeled_windows 切窗模式生成的数据进行制表。使用此脚本制表需要在 events_labeled_windows 中 设置窗口的命名规范。由于有测试期（phase）和测试间（gap）之分，测试期表示被试在静息、诱导、干预的整个时间段；测试间表示每个测试期结束，以及下一个测试期开始前，用户的回答问卷以及静止的期间。这两个期间在分析时是按照两套时间维度对待的，因此对制表有特殊的要求。在使用此方法制表时需要为每个窗口名（windows["name"]）有个明确的标注。改标注放在"window_category"的列表里。例如 "p" 表示 phase,那么测试期的窗口名要加上 p_的前缀，如 p_baseline；"g" 表示 gap, 测试间的窗口名则使用类似 "g_t1" 的名字类型。"psycho_time" 键值表示心理指标测量是在哪个时间类别测量的，比如 "psycho_time" = "g" 表示心理指标是在测试间测量的。程序会根据这些规则来识别不同指标依赖哪些时间，并进行制表。该脚本会制作宽表与长表
+
+宽表数据保存在 data/final/wide_table.csv；长表数据保存在 data/final/long_table.csv
+
+# Z score 分析数据
+
+操作方法：`12_cal_Zscore.py`
+
+该脚本生成用于 Z score 分析的数据。该数据表完全为 spss 的后续分析准备。脚本执行后会打印 变量与值的标签，可直接粘贴到spss syntax 中运行。
+
+生成的信息保存在 data/final/zscore_table.csv

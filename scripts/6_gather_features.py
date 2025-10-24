@@ -248,9 +248,9 @@ def main():
     else:
         requested_cols = []
 
-    TIME_COLS = {"mean_hr_bpm","rmssd_ms","sdnn_ms","pnn50_pct","sd1_ms","sd2_ms"}
-    FREQ_COLS = {"hf_ms2","hf_log_ms2","lf_ms2","lf_log_ms2","hf_band_used","hf_center_hz"}
-    RSA_COLS  = {"rsa_ms","resp_rate_bpm","n_breaths_used","rsa_method"}
+    TIME_COLS = {"mean_hr_bpm","rmssd_ms","sdnn_ms"}
+    FREQ_COLS = {"hf_ms2","hf_log_ms2","lf_ms2","lf_log_ms2"}
+    RSA_COLS  = {"rsa_ms", "rsa_log_ms", "resp_rate_bpm", "resp_amp", "resp_log_amp"}
     ACC_COLS  = {"acc_enmo_mean", "acc_motion_frac"}
 
     rr_plan = []
@@ -273,8 +273,8 @@ def main():
     print(f"[INFO] 应用信号: {signals_to_apply}")
     print(f"[INFO] rr 文件数量: {len(rr_files)}")
     print(f"[INFO] 请求的特征列: {requested_cols}")
-    print(f"[INFO] 推断的 rr 特征计划: {rr_plan}")
-    print(f"[INFO] PARAMS 设置: use_individual_hf={PARAMS.get('use_individual_hf', False)}, log_power={PARAMS.get('log_power', False)}")
+    print(f"[INFO] 获取的生理信号特征计划: {rr_plan}")
+    print(f"[INFO] PARAMS 设置: use_individual_hf={PARAMS.get('use_individual_hf', False)}")
 
     combos = []  # (sid, wid)
     for p in rr_files:
@@ -328,15 +328,19 @@ def main():
         feat_parts = []
         if "time" in rr_plan:
             try:
-                feat_parts.append(f_time.features_segment(rr_df))
+                time_data = f_time.features_segment(rr_df)
+                feat_parts.append(time_data)
                 n_time += 1
+                # print(f'[FEATURES] time: {time_data.columns}')
             except Exception as e:
                 print(f"[WARN] 时域特征失败 {sid}/w{wid}: {e}")
                 n_read_errors += 1
         if "freq" in rr_plan:
             try:
-                feat_parts.append(f_freq.features_segment(rr_df, resp_df=resp_df))
+                freq_data = f_freq.features_segment(rr_df, resp_df=resp_df)
+                feat_parts.append(freq_data)
                 n_freq += 1
+                # print(f'[FEATURES] freq: {freq_data.columns}')
             except Exception as e:
                 print(f"[WARN] 频域特征失败 {sid}/w{wid}: {e}")
                 n_read_errors += 1
@@ -387,7 +391,7 @@ def main():
     out_df = pd.DataFrame(rows)
 
     #---- 对acc 与 resp 去中心化，这两个指标主要用于协变量
-    targets = [c for c in ["acc_enmo_mean","acc_motion_frac","resp_rate_bpm"] if c in out_df.columns]
+    targets = [c for c in ["acc_enmo_mean","acc_motion_frac","resp_rate_bpm","resp_amp","resp_log_amp"] if c in out_df.columns]
     out_df = add_within_between_centering(out_df, id_col="subject_id", cols=targets, add_between=True)
 
     out_path = OUT_ROOT / "physico_features.csv"
