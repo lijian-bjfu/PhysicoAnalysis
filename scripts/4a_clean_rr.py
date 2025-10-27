@@ -17,13 +17,7 @@ from scipy.interpolate import PchipInterpolator
 
 import neurokit2 as nk
 # 可选：hrvanalysis 主要用于与既有口径保持一致（本脚本核心识别逻辑自行实现，更可控）
-try:
-    from hrvanalysis import remove_outliers, remove_ectopic_beats, interpolate_nan_values  # noqa: F401
-except Exception:
-    # 若未安装，也不阻断；核心逻辑不依赖这些函数
-    remove_outliers = None  # type: ignore
-    remove_ectopic_beats = None  # type: ignore
-    interpolate_nan_values = None  # type: ignore
+from hrvanalysis import remove_outliers, remove_ectopic_beats, interpolate_nan_values  # noqa: F401
 
 # --- project-root bootstrap ---
 _p = Path(__file__).resolve()
@@ -61,6 +55,9 @@ RR_T = SCHEMA["rr"]["t"]
 RR_V = SCHEMA["rr"]["v"]
 ECG_T = SCHEMA["ecg"]["t"]
 ECG_V = SCHEMA["ecg"]["v"]
+
+# 处理那种 rr 数据，默认都处理
+CLEAN = ["device_rr", "ecg_rr"] # ["device_rr", "ecg_rr"]
 
 def _rolling_median_exclude_center(x: pd.Series, win: int = 11) -> pd.Series:
     """中心对齐滚动中位数；为稳健起见，使用窗口中位数近似“去中心”。"""
@@ -328,6 +325,321 @@ def _apply_repairs(df: pd.DataFrame, segs: List[Dict]) -> Tuple[pd.DataFrame, Li
     out = pd.DataFrame({RR_T: tt2, RR_V: rr_filled})
     return out, records
 
+def clean_ecgv2_rr(sid: str, summary_records: list) -> None:
+    """
+    清理 v2 算法产生的 RR（来自 ECG→RR 的逐搏表：列须含 t_s, rr_ms）。
+    - 标记规则（取并集）：
+        1) 生理越界：RR < 300 ms 或 RR > 2000 ms
+        2) 相邻相对突变：|ΔRR| / max(prev,1e-6) > rel_thr（默认 0.25）
+        3) 局部中位距：|RR - rolling_median(W=5)| / median > loc_thr（默认 0.25）
+    - 将 True 连续片段合并为“短段”（长度 1..MAX_SEG_BEATS，默认 4），两侧需各有至少一个有效点。
+    - 对每个短段使用“以时间为自变量”的线性插值修复（保持时间轴与 HR 1Hz 聚合一致）。
+    - 写回确认目录，并把修复统计加入 summary_records。
+    """
+    # 读取确认目录中的 RR
+    print(f'[clean ecg rr] 清理 {sid} 的 ecg_rr数据')
+    path_pref = _load_confirmed_rr_path(sid)
+    if not path_pref:
+        print(f"[warn] 未在确认目录找到 {sid} 的 RR 文件，跳过。")
+        return
+
+    df = None
+    if ".csv" in path_pref:
+        df = _read_rr(path_pref[".csv"])
+    elif ".parquet" in path_pref:
+        df = _read_rr(path_pref[".parquet"])
+    if df is None or df.empty or not {"t_s", "rr_ms"}.issubset(df.columns):
+        print(f"[warn] {sid} RR 文件为空/缺列，跳过。")
+        return
+
+    rr = df["rr_ms"].to_numpy(dtype=float)
+    ts = df["t_s"].to_numpy(dtype=float)
+    n  = len(rr)
+
+    # 前后两秒 rr 速度差别，调大＝更宽容，调小＝更严格。数据很毛躁就放宽一点
+    rel_thr = 0.25
+    loc_thr = rel_thr
+    # 标注最低和最高的rr,剔除超过或低于这些极端值的rr
+    RR_MIN, RR_MAX = 300.0, 2000.0
+    # 修复长度，值为rr点数，太小会修不完，太大容易把正常起伏也拉平
+    MAX_SEG_BEATS  = 10   
+    
+    # 识别突然下降的rr,0.85 意味着低于 85% 基线就算突然下降
+    LOW_RUN_RATIO = 0.9   # 识别 RR 值低于局部中位数的比例，越低越宽松
+    # 要连续多少个低点才承认是“突然下降”，数据越碎，用低值
+    LOW_RUN_MINLEN = 1      # 阶梯串最小长度
+    # 不均匀的长短拍。这两个数是“短得多短才算短”“长得多长才算长”的尺子
+    # 调小这两个＝更容易合并（激进），调大＝更保守
+    SLC_SHORT = 0.7         # 例如短于基线的 65% 算“短”
+    SLC_LONG  = 1.3           # 例如长于基线的 140% 算“长”
+    # 改置提高能提升将两个短拍合成一个拍的概率
+    # 把“短+长两拍的总路程”和“正常两拍总路程”比一比
+    # 相差不超过这个比例就认定“确实被拆了”，就合并回去
+    # 0.30 表示差 30% 以内都算能接受。
+    # 调大＝更容易合并（但可能误并），调小＝更谨慎。
+    COMP_TOL = 0.3
+    
+
+    # 供后续规则使用的初始化
+    med = np.full(n, np.nan)
+    extra_segs = []
+    extra_bad = np.zeros(n, dtype=bool)
+
+    # -------- 1) 标记 --------
+    bad_len = (rr < RR_MIN) | (rr > RR_MAX)
+
+    bad_rel = np.zeros(n, dtype=bool)
+    if n >= 2:
+        prev = rr[:-1]
+        drel = np.zeros(n); drel[1:] = np.abs(np.diff(rr)) / np.maximum(prev, 1e-6)
+        bad_rel = drel > rel_thr
+
+    # 局部中位数，5 拍
+    bad_loc = np.zeros(n, dtype=bool)
+    if n >= 5:
+        pad = 2
+        rr_pad = np.r_[np.repeat(rr[0], pad), rr, np.repeat(rr[-1], pad)]
+        med = np.empty(n)
+        for i in range(n):
+            win = rr_pad[i:i+2*pad+1]
+            m = np.nanmedian(win)
+            med[i] = m if np.isfinite(m) else rr[i]
+        bad_loc = np.abs(rr - med) / np.maximum(med, 1e-6) > loc_thr
+
+        if n >= 5:
+            low_band = LOW_RUN_RATIO * med
+            low_mask = rr < np.maximum(low_band, 1e-6)
+
+            # 把连续 True 聚合为段
+            i = 0
+            while i < n:
+                if not low_mask[i]:
+                    i += 1
+                    continue
+                j = i
+                while j + 1 < n and low_mask[j + 1]:
+                    j += 1
+                run_len = j - i + 1
+                if run_len >= LOW_RUN_MINLEN:
+                    # 这是一段“拆拍式”的低 RR 串，交给后续 pair-merge + 插值
+                    extra_segs.append((i, j))
+                    extra_bad[i:j + 1] = True  # 先记录为额外坏点，稍后合并到 bad
+                i = j + 1
+
+    bad = bad_len | bad_rel | bad_loc
+    bad |= extra_bad  # 合并“阶梯串识别”产生的坏点
+
+    # -------- 2) 段聚合（允许端点），并做“成对补偿合并” --------
+    segs = []
+    i = 0
+    while i < n:
+        if not bad[i]:
+            i += 1; continue
+        j = i
+        while j + 1 < n and bad[j + 1]:
+            j += 1
+        seg_len = j - i + 1
+        if 1 <= seg_len <= MAX_SEG_BEATS:
+            segs.append((i, j))
+        i = j + 1
+
+    if extra_segs:
+        segs.extend(extra_segs)
+        # 合并重叠/相邻段，避免重复处理
+        segs.sort()
+        merged = []
+        cur_s, cur_e = segs[0]
+        for s, e in segs[1:]:
+            if s <= cur_e + 1:     # 相邻也合并
+                cur_e = max(cur_e, e)
+            else:
+                merged.append((cur_s, cur_e))
+                cur_s, cur_e = s, e
+        merged.append((cur_s, cur_e))
+        segs = merged
+        
+    if not segs:
+        _write_rr(path_pref, df)
+        summary_records.append({"subject_id": sid, "n_segments": 0, "n_corrected": 0,
+                                "ratio_corrected": 0.0, "warning": ""})
+        return
+
+    rr_fix = rr.copy()
+    corrected = 0
+
+    # 成对补偿合并：两拍短 RR 的和≈局部 2×中位数
+    def _pair_merge(i0, i1):
+        nonlocal rr_fix, corrected
+        k = i0
+        while k + 1 <= i1:
+            # 局部中位数用邻域 5 拍估计
+            lo = max(0, k - 2)
+            hi = min(n, k + 3)
+            mloc = np.nanmedian(rr_fix[lo:hi]) if hi - lo >= 3 else np.nanmedian(rr_fix[max(0,k-1):min(n,k+2)])
+            if not np.isfinite(mloc) or mloc <= 0:
+                mloc = rr_fix[k]
+            if abs((rr_fix[k] + rr_fix[k+1]) - 2.0*mloc) / (2.0*mloc) < COMP_TOL:
+                rr_fix[k+1] = rr_fix[k] + rr_fix[k+1]  # 合并到后一拍
+                rr_fix[k]   = np.nan                   # 前一拍置 NaN，后面统一插值
+                corrected += 1
+            k += 2
+
+    # 形态：rr[k] < SLC_SHORT*med[k] 且 rr[k+1] > SLC_LONG*med[k+1]
+    # 或反向（长-短），都视作漏/重检，执行“合并到后一拍”
+    def _hard_slc_fix(i0, i1):
+        nonlocal rr_fix, corrected
+        k = i0
+        while k + 1 <= i1:
+            m0 = med[k]   if np.isfinite(med[k])   and med[k]   > 0 else rr_fix[k]
+            m1 = med[k+1] if np.isfinite(med[k+1]) and med[k+1] > 0 else rr_fix[k+1]
+            cond_short_long = (rr_fix[k]   < SLC_SHORT * m0) and (rr_fix[k+1] > SLC_LONG * m1)
+            cond_long_short = (rr_fix[k]   > SLC_LONG  * m0) and (rr_fix[k+1] < SLC_SHORT * m1)
+            if cond_short_long or cond_long_short:
+                rr_fix[k+1] = rr_fix[k] + rr_fix[k+1]
+                rr_fix[k]   = np.nan
+                corrected  += 1
+                k += 2
+                continue
+            k += 1
+
+    # 先做硬补偿，再做你的成对补偿
+    for (a, b) in segs:
+        if b - a + 1 >= 2:
+            _hard_slc_fix(a, b)
+            _pair_merge(a, b)
+
+    # -------- 3) 插值修复（允许端点）--------
+    # 先把仍标记为 bad 的位置置 NaN
+    nan_mask = bad | np.isnan(rr_fix)
+    rr_fix[nan_mask] = np.nan
+
+    # 用“时间”为自变量做插值；端点用最近邻延拓
+    good = np.isfinite(rr_fix)
+    if good.sum() >= 2:
+        rr_interp = rr_fix.copy()
+        # 内部线性
+        rr_interp[~good] = np.interp(ts[~good], ts[good], rr_fix[good])
+        # 左端/右端外推：最近邻
+        if np.isnan(rr_interp[0]):
+            rr_interp[0] = rr_interp[np.flatnonzero(~np.isnan(rr_interp))[0]]
+        if np.isnan(rr_interp[-1]):
+            rr_interp[-1] = rr_interp[np.flatnonzero(~np.isnan(rr_interp))[-1]]
+        corrected += int(np.sum(nan_mask))
+        rr_fix = rr_interp
+
+    # -------- 4) 轻度平滑（仅在修复过的邻域）--------
+    if corrected > 0 and n >= 3:
+        mark = np.zeros(n, dtype=bool)
+        for a, b in segs:
+            mark[max(0, a-1):min(n, b+2)] = True
+        rr_sm = rr_fix.copy()
+        for k in range(1, n-1):
+            if mark[k]:
+                rr_sm[k] = np.median([rr_fix[k-1], rr_fix[k], rr_fix[k+1]])
+        rr_fix = rr_sm
+
+    # -------- 5) 可选：hrvanalysis 兜底 --------
+    if remove_outliers and remove_ectopic_beats and interpolate_nan_values:
+        rri = rr_fix.copy()
+        # 越界 → NaN
+        rri[(rri < RR_MIN) | (rri > RR_MAX)] = np.nan
+        # hrvanalysis pipeline：离群→异位搏→插值。method 兼容库支持的 4 种口径
+        _ectopic_method = str(PARAMS.get("hrv_ectopic_method", "malik")).lower()
+        _allowed_methods = {"malik", "kamath", "karlsson", "acar"}
+        if _ectopic_method not in _allowed_methods:
+            _ectopic_method = "malik"
+        rri2 = remove_outliers(rri, low_rri=RR_MIN, high_rri=RR_MAX, verbose=False)
+        # 某些版本的 hrvanalysis 不接受 verbose 参数，这里显式不传
+        try:
+            rri3 = remove_ectopic_beats(rri2, method=_ectopic_method)
+        except TypeError:
+            rri3 = remove_ectopic_beats(rri2, method=_ectopic_method)
+        rri4 = interpolate_nan_values(rri3, interpolation_method="linear")
+        # 只在修复过的区域替换，避免整体口径漂移
+        replace_mask = (np.isnan(rr) | bad).astype(bool)
+
+        # hrvanalysis 返回的常是 list，先转成 ndarray 并做长度对齐
+        rri4_arr = np.asarray(rri4, dtype=float)
+        if rri4_arr.shape[0] != rr_fix.shape[0]:
+            # 极少数情况下长度不一致：按较短长度对齐，剩余位置保留原值
+            m = min(rri4_arr.shape[0], rr_fix.shape[0])
+            tmp = rr_fix.copy()
+            tmp[:m] = np.where(replace_mask[:m], rri4_arr[:m], rr_fix[:m])
+            rr_fix = tmp
+        else:
+            rr_fix = np.where(replace_mask, rri4_arr, rr_fix)
+
+    # -------- 6) 写回 & 汇总 --------
+    df_out = df.copy()
+    df_out["rr_ms"] = rr_fix
+    _write_rr(path_pref, df_out)
+
+    ratio_corr = (np.sum(bad) / max(1, n))
+    summary_records.append({
+        "subject_id": sid, "n_segments": len(segs),
+        "n_corrected": int(np.sum(bad)),
+        "ratio_corrected": round(float(ratio_corr), 4),
+        "warning": ""
+    })
+
+def clean_device_rr(sid: str, summary_records: list) -> None:
+    path_pref = _load_confirmed_rr_path(sid)
+    if not path_pref:
+        print(f"[warn] 未在确认目录找到 {sid} 的 RR 文件，跳过。")
+        return
+
+    # 读取确认目录中的 RR
+    df = None
+    if ".csv" in path_pref:
+        df = _read_rr(path_pref[".csv"])
+    elif ".parquet" in path_pref:
+        df = _read_rr(path_pref[".parquet"])
+
+    if df is None or df.empty:
+        print(f"[warn] {sid} RR 文件为空或不可读，跳过。")
+        return
+
+    # 2) 识别短时尖峰（1..RUN_MAX）
+    segs = _detect_short_spike_segments(df)
+
+    if not segs:
+        # 无短段，原样写回，并记录 0 修正
+        _write_rr(path_pref, df)
+        summary_records.append({
+            "subject_id": sid, "n_segments": 0, "n_corrected": 0,
+            "ratio_corrected": 0.0, "warning": ""
+        })
+        return
+
+    # 3) 提醒条件（不中断）
+    n_corr_beats = int(sum(s["n_beats"] for s in segs))
+    ratio_corr = n_corr_beats / max(1, len(df))
+    warn_msgs = []
+    if len(segs) >= GROUPS_WARN:
+        warn_msgs.append(f"异常短段数量≥{GROUPS_WARN}")
+    if ratio_corr >= RATIO_WARN:
+        warn_msgs.append(f"需修正搏点占比≥{RATIO_WARN:.2f}")
+
+    # 4–5) 参考 ecg_rr，若“两路皆异常”则仅写 QC，不做修复
+    ecg_rr = _load_ecg_rr_from_norm(sid)
+    both_bad = _both_bad(ecg_rr, segs) if ecg_rr is not None else False
+    if both_bad:
+        summary_records.append({
+            "subject_id": sid, "n_segments": len(segs), "n_corrected": 0,
+            "ratio_corrected": 0.0, "warning": "; ".join(["两路皆异常"] + warn_msgs)
+        })
+        # 不修改原文件
+        return
+
+    # 6) 执行修复并写回
+    df_fixed, recs = _apply_repairs(df, segs)  # recs 先保留以便后续需要
+    _write_rr(path_pref, df_fixed)
+
+    summary_records.append({
+        "subject_id": sid, "n_segments": len(segs), "n_corrected": n_corr_beats,
+        "ratio_corrected": round(ratio_corr, 4), "warning": "; ".join(warn_msgs)
+    })
+
 def main():
     dec_path = SELECT_RR_REF_DIR / "decision.csv"
     if not dec_path.exists():
@@ -341,64 +653,21 @@ def main():
         print("[exit] decision.csv 缺少必要列 subject_id / choice_suggested。")
         return
     rows = dec[[sid_col, choice_col]].rename(columns={sid_col: "subject_id", choice_col: "choice"})
-    # 仅处理被选择为 device_rr 的被试
-    tasks = rows[rows["choice"].astype(str).str.lower().eq("device_rr")]
+    # 选择处理哪类 rr 数据。默认都处理 device_rr 或 ecg_rr 的被试
+    tasks = rows[rows["choice"].astype(str).str.lower().isin(["device_rr","ecg_rr"])]
     if tasks.empty:
-        print("[info] 无需处理：decision.csv 中没有选择 device_rr 的被试。")
+        print("[info] 无需处理：decision.csv 中没有选择 device_rr 或 ecg_rr 的被试。")
         return
 
     summary_records: List[Dict] = []
-    for sid in tasks["subject_id"].astype(str).tolist():
-        path_pref = _load_confirmed_rr_path(sid)
-        if not path_pref:
-            print(f"[warn] 未在确认目录找到 {sid} 的 RR 文件，跳过。")
-            continue
-        df = None
-        # 优先读 csv
-        if ".csv" in path_pref:
-            df = _read_rr(path_pref[".csv"]) 
-        elif ".parquet" in path_pref:
-            df = _read_rr(path_pref[".parquet"]) 
-        if df is None or df.empty:
-            print(f"[warn] {sid} RR 文件为空或不可读，跳过。")
-            continue
-
-        # 2) 识别短时尖峰（1..RUN_MAX）
-        segs = _detect_short_spike_segments(df)
-        if not segs:
-            # 无短段，直接覆盖写回原文件（等价原样保持），并记录 0 修正
-            _write_rr(path_pref, df)
-            summary_records.append({"subject_id": sid, "n_segments": 0, "n_corrected": 0, "ratio_corrected": 0.0, "warning": ""})
-            continue
-
-        # 3) 提醒条件（不中断）
-        n_corr_beats = int(sum(s["n_beats"] for s in segs))
-        ratio_corr = n_corr_beats / max(1, len(df))
-        warn_msgs = []
-        if len(segs) >= GROUPS_WARN:
-            warn_msgs.append(f"异常短段数量≥{GROUPS_WARN}")
-        if ratio_corr >= RATIO_WARN:
-            warn_msgs.append(f"需修正搏点占比≥{RATIO_WARN:.2f}")
-
-        # 4–5) 参考 ecg_rr，若“两路皆异常”则仅写 QC，不做修复
-        ecg_rr = _load_ecg_rr_from_norm(sid)
-        both_bad = _both_bad(ecg_rr, segs) if ecg_rr is not None else False
-        if both_bad:
-            summary_records.append({
-                "subject_id": sid, "n_segments": len(segs), "n_corrected": 0,
-                "ratio_corrected": 0.0, "warning": "; ".join(["两路皆异常"] + warn_msgs)
-            })
-            # 不修改原文件
-            continue
-
-        # 6) 执行修复
-        df_fixed, recs = _apply_repairs(df, segs)
-        # 覆盖写回（与确认目录一致）
-        _write_rr(path_pref, df_fixed)
-        summary_records.append({
-            "subject_id": sid, "n_segments": len(segs), "n_corrected": n_corr_beats,
-            "ratio_corrected": round(ratio_corr, 4), "warning": "; ".join(warn_msgs)
-        })
+    for sid, choice in tasks[["subject_id", "choice"]].astype(str).itertuples(index=False):
+        ch = (choice or "").strip().lower()
+        if ch == "device_rr":
+            clean_device_rr(sid, summary_records)
+        elif ch == "ecg_rr":
+            clean_ecgv2_rr(sid, summary_records)
+        else:
+            print(f"[skip] {sid}: 不应该出现的 choice={choice}, 跳过")
 
     # 输出汇总 QC
     if summary_records:

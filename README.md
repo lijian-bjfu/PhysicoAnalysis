@@ -43,19 +43,27 @@ local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文
 
 此步骤还会生成RR数据预览图。根据 settings.DATASET[ACTIVE_DATA]["preview_sids"] 列表中的用户ID绘制。如果列表为空，则只绘制第一个被试的结果。
 
-## 绘图查看
-
-操作方法：`4a_preview.py`
-
-该脚本绘制上一步“确定选择RR”的预览图。用于快速检查RR是否存在问题。预览图根据 settings.DATASET[ACTIVE_DATA]["preview_sids"] 列表中的用户ID绘制。根据 settings.DATASET[ACTIVE_DATA]["windowing"]["apply_to"] 列表中的信号类型绘制信号数据，前提是对应的数据必须在 confirmed/文件夹下有一份拷贝。
+该脚本有个重要的参数 ECG_RR_V = 'v2' 有v1 v2 两个选项，v1是用 NeuroKit2 做的，但数据会失真。v2 算法保守，但会有很多地方识别错误，需要在 clean_rr 中进行专门的清理。
 
 ## 清理 RR 
 
-操作方法：`4b_clean_rr.py`
+操作方法：`4a_clean_rr.py`
 
 该脚本用于处理rr数据中的异常尖峰。操作的数据对象为 confirmed rr。执行该脚本前必须先执行 `3_select_rr.py`，并且在rr_select/路径下有decision.csv文件。`4b_clean_rr.py`会根据该文件中标注为来自 device_rr 的数据进行分析。分析后会给出一份汇总报告 `clean_rr_summary.csv`, 标注对哪些被试的 RR 数据进行处理。n_segments 表示在该被试 RR 中识别到的“短时尖峰短段”的数量。n_corrected 表示需处理的搏点个数之和。ratio_corrected 表示n_corrected / 全部 RR 点数 的比例。warning 当数据糟糕到一定程度会提醒，例如异常短段数达到提醒阈值（默认 4）或需修正搏点占比达到提醒阈值（默认 0.05）
 
 处理后的 RR 会覆盖之前的confirmed rr。
+
+## 绘图查看
+
+操作方法：`4b_preview.py`
+
+该脚本绘制上一步“确定选择RR”的预览图。用于快速检查RR是否存在问题。预览图根据 settings.DATASET[ACTIVE_DATA]["preview_sids"] 列表中的用户ID绘制。根据 settings.DATASET[ACTIVE_DATA]["windowing"]["apply_to"] 列表中的信号类型绘制信号数据，前提是对应的数据必须在 confirmed/文件夹下有一份拷贝。对视图的控制可以通过几个全局变量
+- RR_RAW_FORCE_YLIM = (300, 1200) 设置RR图的 Y 轴大小，默认300-1200 ms是个合理区间
+- HR1HZ_FORCE_YLIM = (40, 120) 设置hr图的 Y 轴大小，常人心跳一般在40-120之间
+- BR_FORCE_YLIM = (6, 30) 呼吸值的 Y 轴区间
+- RESP_MAX_BPM = 30 当记录时间较长，呼吸图会比较密。此值控制曲线的最小间距，控制稀疏程度。越大越稀疏
+- ECG_PLOT_SPAN = 40.0 绘制指定窗口大小的区域的ecg，以方便放大某一时间段的ecg 做深入检查。⚠️ 起始时间需在 main 中设置，可使用 event 标签
+- PRE_SID = [..] 输入想要预览的 sid，程序会根据这些 sid 生成结果
 
 ## 切窗
 
@@ -71,9 +79,17 @@ local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文
 
 ## 整理切窗数据
 
-操作方法：`5b_collect_windowing.py
+操作方法：`5b_collect_windowing.py`
 
 将所有的切窗整理为后续可用的数据。数据保存在windowing/collected/下。数据按照信号类型放在不同的文件夹。同时还生成一个collected_index.csv，供后续整理心率指标的长表使用。
+
+## 切窗数据绘图
+
+操作方法：`5c_window_plot.py`
+
+读取 windowing/collected 文件夹的切窗数据，为制定窗口和制定被试绘图。
+- SID = ["..."] 输入想要查看的被试ID
+- WIN = ["..."] 输入想要查看的窗口ID
 
 ## 计算每窗的指标
 

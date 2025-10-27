@@ -185,7 +185,7 @@ DATASETS = {
             "method": "cover", # cover | subdivide
 
             # 切到哪些信号（不存在则自动跳过）
-            "apply_to": ["rr","resp","acc"],
+            "apply_to": ["rr","resp","acc","ecg"],
 
             # 各模式参数（仅在被选中时读取）
             "modes": {

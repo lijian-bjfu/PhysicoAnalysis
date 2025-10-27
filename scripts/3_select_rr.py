@@ -26,7 +26,7 @@ PRE_SID = DATASETS[ACTIVE_DATA]["preview_sids"]
 # 画图横轴范围策略，基于事件标注起始点绘制，基于hr波长起始点
 # 'auto' | 'events' | 'hr'
 PLOT_RANGE_MODE = 'auto'
-
+ECG_RR_V = 'v2' # v1 v2 两种算法
 
 DEC_SUGG = PREVIEW_DIR / "decision_suggested.csv"
 DEC_FILE = PREVIEW_DIR / "decision.csv"
@@ -53,7 +53,7 @@ def _read_ecg(sid: str):
     return df
 
 # 用 NeuroKit2 在连续心电上找 R 峰，然后转成逐搏 RR 表（两列：t_s 秒、rr_ms 毫秒）
-def _ecg_to_rr(ecg_df: pd.DataFrame):
+def _ecg_to_rr_v1(ecg_df: pd.DataFrame):
     import neurokit2 as nk
     df = ecg_df.copy()
 
@@ -184,6 +184,106 @@ def _ecg_to_rr(ecg_df: pd.DataFrame):
     except Exception:
         pass
     return pd.DataFrame({"t_s": t_rr, "rr_ms": rr_ms_t})
+
+def _ecg_to_rr_v2(ecg_df: pd.DataFrame):
+    df = ecg_df.copy()
+
+    # 1) 先把时间轴和振幅整理干净
+    if "time_s" not in df.columns or "value" not in df.columns:
+        raise ValueError("ECG 缺少 time_s 或 value 列")
+
+    # 排序 + 去重 + 去 NaN
+    df = df.dropna(subset=["time_s", "value"]).sort_values("time_s")
+    # 去掉完全相同时间戳的重复点，避免 dt 中位数被拉成 0
+    dup_mask = df["time_s"].diff().fillna(0).eq(0)
+    if dup_mask.any():
+        df = df[~dup_mask]
+
+    t = df["time_s"].to_numpy(float)
+    sig = df["value"].to_numpy(float)
+    n = len(sig)
+
+    # 取被试ID用于报告（若列存在）
+    sid_dbg = ""
+    try:
+        if "subject_id" in df.columns and pd.notna(df["subject_id"].iloc[0]):
+            sid_dbg = str(df["subject_id"].iloc[0])
+    except Exception:
+        sid_dbg = ""
+
+    # === 采样率估计（按绘图算法） ===
+    # 以原始时间戳中位步长反推 fs；若无效则兜底 130 Hz
+    if n < 5:
+        return None
+    dt = np.median(np.diff(t)) if t.size >= 3 else np.nan
+    if not np.isfinite(dt) or dt <= 0:
+        # 时间轴不合法，放弃
+        return None
+    fs = float(1.0 / dt)
+
+    # === 带通 5–20 Hz（与预览图一致） ===
+    xf = sig.astype(float)
+    try:
+        from scipy.signal import butter, filtfilt
+        low, high = 5.0, 20.0
+        nyq = 0.5 * fs
+        # 防止高截止频率超过 Nyquist，给一点余量
+        hi = min(high, 0.45 * fs)
+        lo = min(low, hi * 0.9) if low >= hi else low
+        if hi > 0 and lo > 0 and hi > lo:
+            b, a = butter(3, [lo / nyq, hi / nyq], btype="band")
+            xf = filtfilt(b, a, xf)
+    except Exception:
+        # 无 SciPy 或滤波失败：直接用原始信号
+        xf = sig.astype(float)
+
+    # === 峰检测（与预览图一致） ===
+    # 最小峰距：0.30 s；prominence 用 1–99 分位的 20%
+    min_dist = int(max(1, round(0.30 * fs)))
+    q1, q99 = np.nanpercentile(xf, [1, 99])
+    prom = max(1e-3, 0.2 * (q99 - q1))
+
+    # 尝试使用 SciPy 的 find_peaks；若不可用则走简易兜底
+    pk = None
+    try:
+        from scipy.signal import find_peaks
+        pk, _ = find_peaks(xf, distance=min_dist, prominence=prom)
+    except Exception:
+        pk = None
+
+    if pk is None:
+        # 简易兜底：基于导数符号变化选局部极大值，并做基于 distance 的非极大抑制
+        y = xf
+        dy_prev = np.r_[np.nan, np.diff(y)]
+        dy_next = np.r_[np.diff(y), np.nan]
+        cand = np.where((dy_prev > 0) & (dy_next < 0))[0]
+        # 以幅度排序，做非极大值抑制
+        cand = cand[np.argsort(y[cand])[::-1]]
+        kept = []
+        for i in cand:
+            if any(abs(i - k) < min_dist for k in kept):
+                continue
+            left = max(0, i - min_dist)
+            right = min(len(y) - 1, i + min_dist)
+            base = min(np.nanmin(y[left:i+1]) if i > left else y[i],
+                       np.nanmin(y[i:right+1]) if right > i else y[i])
+            if (y[i] - base) >= prom:
+                kept.append(i)
+        kept.sort()
+        pk = np.asarray(kept, dtype=int)
+
+    # 峰过少则放弃
+    if pk is None or pk.size < 2:
+        return None
+
+    # === 以“时间戳差”直接计算 RR（毫秒） ===
+    r_times = t[pk].astype(float)
+    rr_ms_t = np.diff(r_times) * 1000.0
+    t_rr = r_times[1:]
+
+    # 与预览图一致：此版本不做清理，只返回两列，供后续管线/比较使用
+    return pd.DataFrame({"t_s": t_rr, "rr_ms": rr_ms_t})
+
 
 # 从 <sid>_rr.csv 读设备原生 RR
 def _read_device_rr(sid: str):
@@ -484,7 +584,10 @@ def main():
             if ecg is None:
                 print(f"[skip] {sid} 找不到 ECG 文件")
                 continue
-            rr = _ecg_to_rr(ecg)
+            if ECG_RR_V == 'v1':
+                rr = _ecg_to_rr_v1(ecg) 
+            if ECG_RR_V == 'v2':
+                rr = _ecg_to_rr_v2(ecg)
             if rr is None or rr.empty:
                 print(f"[warn] {sid} ECG→RR 失败或为空")
                 continue
@@ -508,7 +611,11 @@ def main():
     for sid in iter_sids:
         rr_dev = _read_device_rr(sid)
         ecg = _read_ecg(sid)
-        rr_ecg = _ecg_to_rr(ecg) if ecg is not None else None
+        if ECG_RR_V == 'v1':
+            rr_ecg = _ecg_to_rr_v1(ecg) if ecg is not None else None
+        if ECG_RR_V == 'v2':
+            rr_ecg = _ecg_to_rr_v2(ecg) if ecg is not None else None
+
         # 打印 采样率和数据长度
         if rr_ecg is None and ecg is not None:
             fs_dbg = float(ecg.get("fs_hz", pd.Series([np.nan])).iloc[0]) if "fs_hz" in ecg.columns else float("nan")
@@ -651,7 +758,11 @@ def main():
         rr = _read_device_rr(sid) if choice=="device_rr" else None
         if rr is None:
             ecg = _read_ecg(sid)
-            rr = _ecg_to_rr(ecg) if ecg is not None else None
+            if ECG_RR_V == 'v1':
+                rr = _ecg_to_rr_v1(ecg) if ecg is not None else None
+            if ECG_RR_V == 'v2':
+                rr = _ecg_to_rr_v2(ecg) if ecg is not None else None
+
         if rr is None:
             print(f"[warn] {sid} 无法生成最终 RR"); continue
 

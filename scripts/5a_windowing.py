@@ -612,7 +612,6 @@ def build_windows_subdivide(cfg: dict) -> tuple[list[dict], Path, int, int]:
     return out_windows, parent_dir, parent_level, parent_w_id
 
 # 将各信号在窗口内切出并保存
-
 def _save_windows_for_subject(sid: str, cfg: dict, windows_df: pd.DataFrame, out_dir: Path, level: int) -> dict:
     """
     保存 <sid>_<signal>_wNN.csv，并在文件内写入 w_id, level, meaning 列。
@@ -632,6 +631,9 @@ def _save_windows_for_subject(sid: str, cfg: dict, windows_df: pd.DataFrame, out
         if signal == "resp":
             paths = [cfg["paths"]["other"] / f"{sid}_resp.csv", cfg["paths"]["other"] / f"{sid}_resp.parquet"]
             return _try_load(paths, {SCHEMA["resp"]["t"]:"time_s", SCHEMA["resp"]["v"]:"value"}, "time_s")
+        if signal == "ecg":
+            paths = [cfg["paths"]["other"] / f"{sid}_ecg.csv", cfg["paths"]["other"] / f"{sid}_ecg.parquet"]
+            return _try_load(paths, {SCHEMA["ecg"]["t"]:"time_s", SCHEMA["ecg"]["v"]:"value"}, "time_s")
         if signal == "acc":
             paths = [cfg["paths"]["other"] / f"{sid}_acc.csv", cfg["paths"]["other"] / f"{sid}_acc.parquet"]
             return _try_load(paths, {SCHEMA["acc"]["t"]:"time_s", SCHEMA["acc"]["vx"]:"value_x", SCHEMA["acc"]["vy"]:"value_y", SCHEMA["acc"]["vz"]:"value_z"}, "time_s")
