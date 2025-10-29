@@ -32,7 +32,7 @@ OUT_DIR       = (OUT_ROOT / 'window_plots').resolve()
 
 # 要绘制的被试ID列表与窗口ID列表，按照这个列表生成预览图
 SID = ["P001S001T001R001","P002S001T002R001","P003S001T001R001","P004S001T002R001"]
-WIN = ['w02','w06']
+WIN = ['w04','w06']
 
 import matplotlib.pyplot as plt
 

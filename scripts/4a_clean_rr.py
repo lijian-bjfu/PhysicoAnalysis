@@ -386,15 +386,16 @@ def clean_ecgv2_rr(sid: str, summary_records: list) -> None:
     extra_bad = np.zeros(n, dtype=bool)
 
     # -------- 1) 标记 --------
+    # bad_len 合法 rr 所在的 绝对阈值区间
     bad_len = (rr < RR_MIN) | (rr > RR_MAX)
-
+    # bad_rel 合法 rr 相对变化
     bad_rel = np.zeros(n, dtype=bool)
     if n >= 2:
         prev = rr[:-1]
         drel = np.zeros(n); drel[1:] = np.abs(np.diff(rr)) / np.maximum(prev, 1e-6)
         bad_rel = drel > rel_thr
 
-    # 局部中位数，5 拍
+    # bad_loc 局部中位数，5 拍
     bad_loc = np.zeros(n, dtype=bool)
     if n >= 5:
         pad = 2
