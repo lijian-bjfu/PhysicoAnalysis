@@ -33,7 +33,7 @@ def select_folder(title="请选择包含t0, t1, t2 CSV文件的文件夹"):
 
 def parse_psycho_indices(psycho_indices: list):
     """
-    按你的规则，解析 'psycho_indices' 列表。
+    按规则，解析 'psycho_indices' 列表。
     
     它会“发现”时间点，验证它们，并返回处理所需的所有映射。
     

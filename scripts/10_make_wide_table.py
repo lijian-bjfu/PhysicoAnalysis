@@ -36,6 +36,7 @@ PSYCHO_COLUMNS:  List[str] = DS.get("psycho_indices", []) or []
 # w_id → phase 的固定映射
 WID_TO_PHASE = {1: "baseline", 2: "induction", 3: "intervention", 4: "recovery"}
 PHASE_ORDER = ["baseline", "induction", "intervention", "recovery"]
+TABLE_TYPE = "psy" # 可选 psy, phy, both
 
 
 def _extract_sid_num(x) -> int | None:
@@ -231,34 +232,27 @@ def _pivot_psycho(psy: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_wide_table() -> pd.DataFrame:
-    phy = _load_physico(PHYSICO_FILE)
-    psy = _load_psycho(PSYCHO_FILE)
+    if TABLE_TYPE == "both":
+        phy = _load_physico(PHYSICO_FILE)
+        psy = _load_psycho(PSYCHO_FILE)
 
-    phy_wide = _pivot_physio_no_agg(phy)
-    psy_wide = _pivot_psycho(psy)
+        phy_wide = _pivot_physio_no_agg(phy)
+        psy_wide = _pivot_psycho(psy)
 
-    # 一人一行合并（键：_merge_id，字符串类型，避免 dtype 不一致）
-    wide = phy_wide.merge(psy_wide, on="_merge_id", how="left", validate="1:1").drop(columns=["_merge_id"])
+        # 一人一行合并（键：_merge_id，字符串类型，避免 dtype 不一致）
+        wide = phy_wide.merge(psy_wide, on="_merge_id", how="left", validate="1:1").drop(columns=["_merge_id"])
 
-    # 可选：若存在典型列名则计算 Δ（不做其他派生）
-    # STAI：优先使用 T1/T2/T3；若存在 T0/T1/T3 也计算
-    if {"stai_T1", "stai_T2"}.issubset(wide.columns):
-        wide["d_stai_induction"] = wide["stai_T2"] - wide["stai_T1"]
-    elif {"stai_T0", "stai_T1"}.issubset(wide.columns):
-        wide["d_stai_induction"] = wide["stai_T1"] - wide["stai_T0"]
-
-    if {"stai_T2", "stai_T3"}.issubset(wide.columns):
-        wide["d_stai_intervention"] = wide["stai_T3"] - wide["stai_T2"]
-    elif {"stai_T1", "stai_T3"}.issubset(wide.columns):
-        wide["d_stai_intervention"] = wide["stai_T3"] - wide["stai_T1"]
-
-    # HRV：按阶段名
-    if {"lnrmssd_baseline", "lnrmssd_induction"}.issubset(wide.columns):
-        wide["d_lnrmssd_induction"] = wide["lnrmssd_induction"] - wide["lnrmssd_baseline"]
-    if {"lnrmssd_induction", "lnrmssd_intervention"}.issubset(wide.columns):
-        wide["d_lnrmssd_intervention"] = wide["lnrmssd_intervention"] - wide["lnrmssd_induction"]
-
-    return wide
+        return wide
+    
+    if TABLE_TYPE == "phy":
+        phy = _load_physico(PHYSICO_FILE)
+        phy_wide = _pivot_physio_no_agg(phy)
+        return phy_wide
+    
+    if TABLE_TYPE == "psy":
+        psy = _load_psycho(PSYCHO_FILE)
+        psy_wide = _pivot_psycho(psy)
+        return psy_wide
 
 
 def main() -> None:
