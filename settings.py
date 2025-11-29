@@ -370,6 +370,14 @@ DATASETS = {
             "peou",
             "effort",
             "pa",
+            # *-- t0-基本信息 --*
+            "sex",
+            "age",
+            "art_exp",
+            "color_exp",
+            "color_join"
+            "ipad_exp",
+            "health",
         ]
     },
     "fantasia": {

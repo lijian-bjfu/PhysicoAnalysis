@@ -31,7 +31,7 @@ def select_folder(title="请选择包含t0, t1, t2 CSV文件的文件夹"):
         
     return Path(folder_path)
 
-def parse_psycho_indices(psycho_indices: list):
+def parse_psycho_indices_old(psycho_indices: list):
     """
     按规则，解析 'sttings.psycho_indices' 列表。
     
@@ -71,7 +71,7 @@ def parse_psycho_indices(psycho_indices: list):
             return None, None, None, None
         
         # 只有静态变量，我们假设它们都在 't2.csv' (或某个默认文件)
-        # 根据你的逻辑，这是非时间性的，所以它们应附加到最后一个时间点
+        # 静态变量是非时间性的，所以它们应附加到最后一个时间点
         # 我们暂时返回一个默认的、最后的时间点 't2'
         print("[警告] 未找到时间性指标。所有指标将作为非时间性处理，并假设从 't2.csv' 加载。", file=sys.stderr)
         time_points = ['t2'] # 默认
@@ -134,6 +134,64 @@ def parse_psycho_indices(psycho_indices: list):
     base_time_vars = sorted(list(base_time_vars_set))
     return time_points, rename_maps, static_vars, base_time_vars
 
+def parse_psycho_indices(psycho_indices: list):
+    """
+    按规则解析 'psycho_indices'。
+    [修改] 静态变量 (static_vars) 强制绑定到 't0'，并确保 't0' 被包含在处理列表中。
+    """
+    
+    time_vars_by_base = defaultdict(list)
+    static_vars = []
+    
+    # 1. 解析
+    regex = re.compile(r"^(t\d+)_(.+)") 
+    for var in psycho_indices:
+        match = regex.match(var)
+        if match:
+            prefix = match.group(1)      # e.g., 't1'
+            base_name = match.group(2)   # e.g., 'STAI_Mean'
+            time_vars_by_base[base_name].append((prefix, var)) 
+        else:
+            static_vars.append(var) # e.g., 'sex', 'age'
+
+    # 2. 收集所有发现的时间点前缀
+    base_names = list(time_vars_by_base.keys())
+    if base_names:
+        # 获取第一个指标的前缀集合作为基准
+        expected_prefixes = {p[0] for p in time_vars_by_base[base_names[0]]}
+    else:
+        expected_prefixes = set()
+
+    # [新增] 如果有静态变量，强制添加 't0' 到预期时间点中
+    if static_vars:
+        if 't0' not in expected_prefixes:
+            print(f"[提示] 检测到静态指标 {static_vars}，将自动从 't0.csv' 读取。", file=sys.stderr)
+            expected_prefixes.add('t0')
+
+    # 3. 排序
+    # 按数字大小排序 (t0, t1, t2...)
+    time_points = sorted(list(expected_prefixes), key=lambda p: int(p[1:])) 
+
+    # 4. 构建映射
+    rename_maps = defaultdict(dict)
+    base_time_vars_set = set()
+    
+    # 处理带前缀的时间性指标
+    for base_name, vars_list in time_vars_by_base.items():
+        base_time_vars_set.add(base_name)
+        for (prefix, full_var_name) in vars_list:
+            rename_maps[prefix][full_var_name] = base_name
+            
+    # [修改] 处理非时间性指标 -> 映射到 't0'
+    if static_vars:
+        target_tp = 't0'
+        # 即使 t0 没有被前面的逻辑加入（例如只有静态变量），这里也确保它在 map 中
+        for var in static_vars:
+            rename_maps[target_tp][var] = var
+    
+    base_time_vars = sorted(list(base_time_vars_set))
+    return time_points, rename_maps, static_vars, base_time_vars
+
 def process_data(input_dir: Path, psycho_indices: list, out_root_path: Path):
     """
     核心处理逻辑：读取CSV，根据解析结果重塑为长表，并保存。
@@ -166,6 +224,10 @@ def process_data(input_dir: Path, psycho_indices: list, out_root_path: Path):
             file_path = input_dir / file_name
             
             print(f"    正在读取: {file_path}")
+
+            if not file_path.exists():
+                print(f"[警告] 文件缺失: {file_name}，跳过。", file=sys.stderr)
+                continue
             
             # 加载CSV
             df = pd.read_csv(file_path)
