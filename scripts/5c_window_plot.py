@@ -31,8 +31,8 @@ OUT_DIR       = (OUT_ROOT / 'window_plots').resolve()
 # 2. RR 原始信号图：每个被试在同一窗口上绘制独立的rr原始信号图，原始RR图须展示被试窗口内RR数据波动全貌，Y 轴范围根据数据调整。时间轴 t_s 做去基线处理 df['t_s_relative'] = df['t_s'] - df['t_s'].min()，然后使用这个 t_s_relative 来绘图，这样所有被试的曲线都会从 0 秒开始，更便于比较。生成的图命名为 {win_id}_{sub_id})_rr.png
 
 # 要绘制的被试ID列表与窗口ID列表，按照这个列表生成预览图
-SID = ["P001S001T001R001","P002S001T002R001","P003S001T001R001","P004S001T002R001"]
-WIN = ['w04','w06']
+SID = ["P006S001T002R001","P007S001T001R001","P008S001T002R001","P009S001T001R001","P011S001T001R001","P010S001T002R001","P012S001T001R001","P013S001T002R001","P014S001T001R001","P015S001T002R001",]
+WIN = ['w03','w04','w05','w06']
 
 import matplotlib.pyplot as plt
 

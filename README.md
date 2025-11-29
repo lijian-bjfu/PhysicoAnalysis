@@ -57,13 +57,23 @@ local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文
 
 操作方法：`4b_preview.py`
 
-该脚本绘制上一步“确定选择RR”的预览图。用于快速检查RR是否存在问题。预览图根据 settings.DATASET[ACTIVE_DATA]["preview_sids"] 列表中的用户ID绘制。根据 settings.DATASET[ACTIVE_DATA]["windowing"]["apply_to"] 列表中的信号类型绘制信号数据，前提是对应的数据必须在 confirmed/文件夹下有一份拷贝。对视图的控制可以通过几个全局变量
+该脚本绘制上一步“确定选择RR”的预览图。用于快速检查RR是否存在问题。预览图根据 settings.DATASET[ACTIVE_DATA]["preview_sids"] 列表中的用户ID绘制。根据 settings.DATASET[ACTIVE_DATA]["windowing"]["apply_to"] 列表中的信号类型绘制信号数据，前提是对应的数据必须在 confirmed/文件夹下有一份拷贝。events, ecg的数据放在 norm/ 下。
+对视图的控制可以通过几个全局变量
 - RR_RAW_FORCE_YLIM = (300, 1200) 设置RR图的 Y 轴大小，默认300-1200 ms是个合理区间
 - HR1HZ_FORCE_YLIM = (40, 120) 设置hr图的 Y 轴大小，常人心跳一般在40-120之间
 - BR_FORCE_YLIM = (6, 30) 呼吸值的 Y 轴区间
 - RESP_MAX_BPM = 30 当记录时间较长，呼吸图会比较密。此值控制曲线的最小间距，控制稀疏程度。越大越稀疏
 - ECG_PLOT_SPAN = 40.0 绘制指定窗口大小的区域的ecg，以方便放大某一时间段的ecg 做深入检查。⚠️ 起始时间需在 main 中设置，可使用 event 标签
 - PRE_SID = [..] 输入想要预览的 sid，程序会根据这些 sid 生成结果
+此外，该方法可以放大一段ECG数据。修改 make_windowing_ecg_plot 的参数，设置开始点和时长：
+`
+make_windowing_ecg_plot(
+    sid=sid, 
+    event="Baseline",  # <--- 设置1：起始点（通过事件名查找）
+    t_start=None,      # <--- 设置2：起始点（手动指定秒数，如果 event 为 None）
+    span=10.0          # <--- 设置3：时长（秒）
+)
+`
 
 ## 切窗
 
@@ -118,6 +128,7 @@ local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文
 操作方法：`9_collect_psycho.py`
 
 该脚本构建心理指标宽表。在使用该脚本前，需要分别将各时间段的心理测量结果保存为 t0.csv, t1.csv, t2.csv 等格式，设定好心理指标名称，时间性测量指标要加入 `t0_` 的前缀，比如基线、诱导和干预三个阶段的状态焦虑指标为 t0_stai, t1_stai, t2_stai。非时间性指标不要加前缀，直接写flow, peou等指标名称。将所有 csv 放在同一个文件夹下。
+所有文件要预先计算出几个指标的的值（计算平均值，参考提供的snytax），标注好被测id（subject_id列，与生理数据保持一致）。
 
 在 settings 中 "psycho_indices" 列出程序需要调用的指标。程序运行后会跳出系统窗口，可交互式地指定csv所在路径。生成心理指标表
 
@@ -135,7 +146,7 @@ local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文
 
 操作方法：`11_make_ELW_table.py`
 
-该脚本针对包含测试中与测试后的复杂切窗模型设计的。专门用于对使用 settings 中 events_labeled_windows 切窗模式生成的数据进行制表。使用此脚本制表需要在 events_labeled_windows 中 设置窗口的命名规范。由于有测试期（phase）和测试间（gap）之分，测试期表示被试在静息、诱导、干预的整个时间段；测试间表示每个测试期结束，以及下一个测试期开始前，用户的回答问卷以及静止的期间。这两个期间在分析时是按照两套时间维度对待的，因此对制表有特殊的要求。在使用此方法制表时需要为每个窗口名（windows["name"]）有个明确的标注。改标注放在"window_category"的列表里。例如 "p" 表示 phase,那么测试期的窗口名要加上 p_的前缀，如 p_baseline；"g" 表示 gap, 测试间的窗口名则使用类似 "g_t1" 的名字类型。"psycho_time" 键值表示心理指标测量是在哪个时间类别测量的，比如 "psycho_time" = "g" 表示心理指标是在测试间测量的。程序会根据这些规则来识别不同指标依赖哪些时间，并进行制表。该脚本会制作宽表与长表
+该脚本针对包含测试中与测试后的复杂切窗模型设计的。专门用于对使用 settings 中 events_labeled_windows 切窗模式生成的数据进行制表。使用此脚本制表需要在 events_labeled_windows 中 设置窗口的命名规范。由于有测试期（phase）和测试间（gap）之分，测试期表示被试在静息、诱导、干预的整个时间段；测试间表示每个测试期结束，以及下一个测试期开始前，用户的回答问卷以及静止的期间。这两个期间在分析时是按照两套时间维度对待的，因此对制表有特殊的要求。在使用此方法制表时需要为每个窗口名（windows["name"]）有个明确的标注。改标注放在"window_category"的列表里。例如 "p" 表示 phase,那么测试期的窗口名要加上 p_的前缀，如 p_baseline；"g_" 表示 gap, 测试间的窗口名则使用类似 "g_t1" 的名字类型。"psycho_time" 键值表示心理指标测量是在哪个时间类别测量的，比如 "psycho_time" = "g" 表示心理指标是在测试间测量的。程序会根据这些规则来识别不同指标依赖哪些时间，并进行制表。该脚本会制作宽表与长表
 
 宽表数据保存在 data/final/wide_table.csv；长表数据保存在 data/final/long_table.csv
 

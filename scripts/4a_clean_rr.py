@@ -40,8 +40,8 @@ SELECT_RR_REF_DIR = (DATA_DIR / paths["rr_select"]).resolve()  # 包含 decision
 # —— 读配置（含新增 RR 清理参数，设置默认以避免缺失键导致崩溃） ——
 RR_REL_THR = float(PARAMS.get("rr_artifact_threshold", 0.20))
 HR_MIN, HR_MAX = PARAMS.get("hr_min_max_bpm", (35, 140))
-RR_LOW_MS = 300.0
-RR_HIGH_MS = 2000.0
+RR_LOW_MS = 510.0 # 这个值用于过滤离群值（最低），先绘图，根据图来判断阈值
+RR_HIGH_MS = 2000.0 # 最高的离群值阈值
 RR_DABS_MS = float(PARAMS.get("rr_delta_abs_ms", 150.0))
 RUN_MAX = int(PARAMS.get("rr_short_run_max_beats", 5))
 COMP_TOL = float(PARAMS.get("rr_pair_comp_tolerance", 0.15))
@@ -49,7 +49,10 @@ GROUPS_WARN = int(PARAMS.get("rr_groups_warn", 4))
 RATIO_WARN = float(PARAMS.get("rr_max_correct_ratio_warn", 0.05))
 BOTH_BAD_THR = float(PARAMS.get("both_bad_rel_dev_thr", 0.15))
 INTERP_METHOD = str(PARAMS.get("interp_method", "pchip")).lower()
-MERGE_ENABLE = bool(PARAMS.get("pair_merge_enable", True))
+
+# 禁止对两个点直接相加，当出现“一短一长”且“两者之和等于两倍正常值”时，代码会触发 BUG
+# MERGE_ENABLE = bool(PARAMS.get("pair_merge_enable", True))
+MERGE_ENABLE = False
 
 RR_T = SCHEMA["rr"]["t"]
 RR_V = SCHEMA["rr"]["v"]
@@ -629,8 +632,8 @@ def clean_device_rr(sid: str, summary_records: list) -> None:
             "subject_id": sid, "n_segments": len(segs), "n_corrected": 0,
             "ratio_corrected": 0.0, "warning": "; ".join(["两路皆异常"] + warn_msgs)
         })
-        # 不修改原文件
-        return
+        # 还是要修改原文件
+        # return
 
     # 6) 执行修复并写回
     df_fixed, recs = _apply_repairs(df, segs)  # recs 先保留以便后续需要

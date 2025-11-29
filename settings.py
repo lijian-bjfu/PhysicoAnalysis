@@ -241,13 +241,13 @@ DATASETS = {
                         {
                             "name": "p_baseline",
                             "start_event": "baseline_start",
-                            "end_event": "custom_event",
+                            "end_event": "p0",
                             "inset": 30
                         },
                         {
                             "name": "g_t1",
-                            "start_event": "custom_event",
-                            "end_event": "stim_start",
+                            "start_event": "p0",
+                            "end_event": "p1",
                             "inset": 2
                         },
                         {
@@ -259,7 +259,7 @@ DATASETS = {
                         {
                             "name": "g_t2",
                             "start_event": "stim_end",
-                            "end_event": "intervention_start",
+                            "end_event": "p2",
                             "inset": 2
                         },
                         {
@@ -271,8 +271,8 @@ DATASETS = {
                         {
                             "name": "g_recovery",
                             "start_event": "intervention_end",
-                            "end_event": "stop",
-                            "inset": 5
+                            "end_event": "p3",
+                            "inset": 2
                         }
                     ]
                 },
@@ -306,21 +306,21 @@ DATASETS = {
         },
         # 输出参数，输出的生理指标必须现在此处注册
         "signal_features": [
-            # -- 频域特征
+            # *-- 频域特征 --*
             "hf_ms2", 
             "hf_log_ms2", 
             "lf_ms2", 
             "lf_log_ms2", 
             # "hf_band_used", 
             # "hf_center_hz",
-            # -- 时域特征
+            # *-- 时域特征 --*
             "mean_hr_bpm",
             "rmssd_ms",
-            # "sdnn_ms",
-            # "pnn50_pct",
+            "sdnn_ms",
+            "pnn50_pct",
             # "sd1_ms",
             # "sd2_ms",
-            # rsa 特征
+            # *-- rsa 特征 --*
             "rsa_ms",
             "rsa_log_ms",
             "resp_amp",
@@ -328,16 +328,20 @@ DATASETS = {
             "resp_rate_bpm",
             # "n_breaths_used",
             # "rsa_method",
-            # -- 运动 acc",
+            # *-- 运动 acc" --*
+            # enmo 表示瞬时的运动强度
+            # motion_frac表示是否处于运动状态
             "acc_enmo_mean",
-            "acc_motion_frac",
-            # —— 去中心化列 —— 
+            # "acc_motion_frac",
+            # *-- 去中心化列 --*
+            # ws 表示基于基线偏移值
+            # bs 表示每个被试自己的跨时点平均
             "acc_enmo_mean_ws",
-            "acc_motion_frac_ws",
+            # "acc_motion_frac_ws",
             "resp_rate_bpm_ws",
-            "acc_enmo_mean_bs",
-            "acc_motion_frac_bs",
-            "resp_rate_bpm_bs",
+            # "acc_enmo_mean_bs",
+            # "acc_motion_frac_bs",
+            # "resp_rate_bpm_bs",
             ],
         "preview_sids": ["P002S001T001R001"], # 选择预览被试id
         "psycho_indices": [
@@ -350,16 +354,19 @@ DATASETS = {
             "t1_sbm",
             "t2_sbm",
             "t3_sbm",
-            "fc_balance",
-            "fc_goal",
-            "fc_feedback",
-            "fc_concentration",
-            "fc_selflessness",
-            "fc_time",
-            "fc_autotelic",
-            "fc_merging",
-            "fc_control",
-            "fc",
+            "t1_sbs",
+            "t2_sbs",
+            "t3_sbs",
+            "fss_balance",
+            "fss_goal",
+            "fss_feedback",
+            "fss_concentration",
+            "fss_selflessness",
+            "fss_time",
+            "fss_autotelic",
+            "fss_merging",
+            "fss_control",
+            "fss",
             "peou",
             "effort",
             "pa",

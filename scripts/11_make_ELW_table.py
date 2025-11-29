@@ -474,6 +474,12 @@ def build_wide_table() -> pd.DataFrame:
     # 合并宽表（以 _merge_id 为键）
     wide = phy_wide.merge(psy_wide, on="_merge_id", how="left", validate="1:1").drop(columns=["_merge_id"])
 
+    # [修改] 强制转数值类型，无法转换的变为 NaN (errors='coerce')
+    cols_to_numeric = ["stai_T0", "stai_T1", "stai_T2", "stai_T3"]
+    for c in cols_to_numeric:
+        if c in wide.columns:
+            wide[c] = pd.to_numeric(wide[c], errors='coerce')
+
     # 可选 Δ 指标
     if {"stai_T1", "stai_T2"}.issubset(wide.columns):
         wide["d_stai_induction"] = wide["stai_T2"] - wide["stai_T1"]

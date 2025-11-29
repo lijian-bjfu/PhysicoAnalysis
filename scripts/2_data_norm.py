@@ -1,6 +1,6 @@
 # scripts/2_data_norm.py
 """
-批处理数据规范化（超薄壳）：
+批处理数据规范化,规范化数据列表名：
 - 读取 settings.DATASETS[ACTIVE_DATA] 中的 root 目录
 - 递归扫描文件（csv/parquet 为主；其它交给各 loader 预处理）
 - 调用标准化小工具：

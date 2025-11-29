@@ -42,14 +42,17 @@ HR1HZ_FORCE_YLIM = (40, 120)
 # Force y-limits for breathing rate (BR, breaths/min). None to disable.
 BR_FORCE_YLIM = (6, 30)
 # 绘制呼吸图时曲线的最小间距，控制稀疏程度。越大越稀疏
-RESP_MAX_BPM = 30 
-# 绘制 ecg 图时窗口的大小
-ECG_PLOT_SPAN = 40.0
+RESP_MAX_BPM = 30
+# ecg 放大图的起点（make_windowing_ecg_plot），事件名或具体时间点选其一
+ECG_PlOT_START_EVENT = None
+ECG_PLOT_START = 266800
+# ecg 放大图时窗口的大小，
+ECG_PLOT_SPAN = 180.0
 
 # 不按照系统设定，临时检查文件
 # SRC_DIR = (DATA_DIR / paths["confirmed"])
-# PRE_SID = ["P001S001T001R001","P002S001T002R001","P003S001T001R001","P004S001T002R001"]
-PRE_SID = ["P001S001T001R001"]
+PRE_SID = ["P011S001T001R001","P012S001T001R001","P013S001T002R001","P014S001T001R001","P015S001T002R001",]
+# PRE_SID = ["P009S001T001R001"]
 # PRE_SIG = ["rr"]
 
 # Use SCHEMA-defined canonical column names first, then fallback heuristics
@@ -252,7 +255,6 @@ def _smooth_value(df, win=3):
     out["value"] = y.values
     return out
 
-
 # --- Helper: robust peak finding for 1D array, with scipy or numpy fallback ---
 def _find_peaks_robust(y: np.ndarray, distance: int, prominence: float, width: Optional[int] = None) -> np.ndarray:
     """Return indices of peaks in 1D array y.
@@ -293,7 +295,6 @@ def _find_peaks_robust(y: np.ndarray, distance: int, prominence: float, width: O
     kept.sort()
     return np.array(kept, dtype=int)
 
-
 def _prep_resp_for_plot(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, float]:
     """Preprocess RESP for raw plotting: aggregate, smooth, and return (df_plot, hz).
     We keep ORIGINAL units, just make it readable.
@@ -307,7 +308,6 @@ def _prep_resp_for_plot(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, float]:
     s = pd.Series(df_plot["value"].values).rolling(window=k, center=True, min_periods=1).mean()
     df_plot["value"] = s.values
     return df_plot, hz
-
 
 # --- Helper: overlay events on axes ---
 def _overlay_events_on_axes(ax, sid: str):
@@ -328,7 +328,6 @@ def _overlay_events_on_axes(ax, sid: str):
                         alpha=0.9, zorder=3, clip_on=True)
     else:
         print(f"[info] {sid}: no events to annotate under norm")
-
 
 def load_signal_raw(src_dir: Path, sid: str, signal: str) -> Optional[tuple[pd.DataFrame, str]]:
     """Load a signal in ORIGINAL scale (no normalization, no RR→HR conversion).
@@ -1077,7 +1076,7 @@ def plot_quick_preview(sid):
         # 绘制全部ecg图
         _plot_ecg_signal(sid, "ecg")
         # 绘制制定窗口的edg
-        make_windowing_ecg_plot(sid, event="intervention_end", t_start=None, span=ECG_PLOT_SPAN)
+        make_windowing_ecg_plot(sid, event=ECG_PlOT_START_EVENT, t_start=ECG_PLOT_START, span=ECG_PLOT_SPAN)
 def main():
     # Iterate over all PRE_SID with a progress bar
     sids = PRE_SID if isinstance(PRE_SID, (list, tuple)) else []

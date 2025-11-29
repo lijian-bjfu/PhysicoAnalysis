@@ -33,7 +33,7 @@ def select_folder(title="请选择包含t0, t1, t2 CSV文件的文件夹"):
 
 def parse_psycho_indices(psycho_indices: list):
     """
-    按规则，解析 'psycho_indices' 列表。
+    按规则，解析 'sttings.psycho_indices' 列表。
     
     它会“发现”时间点，验证它们，并返回处理所需的所有映射。
     
@@ -55,7 +55,7 @@ def parse_psycho_indices(psycho_indices: list):
     for var in psycho_indices:
         match = regex.match(var)
         if match:
-            prefix = match.group(1)      # e.g., 't0'
+            prefix = match.group(1)      # e.g., 't1'
             base_name = match.group(2)   # e.g., 'STAI_Mean'
             
             # 存储 (前缀, 原始全名)
@@ -134,7 +134,6 @@ def parse_psycho_indices(psycho_indices: list):
     base_time_vars = sorted(list(base_time_vars_set))
     return time_points, rename_maps, static_vars, base_time_vars
 
-
 def process_data(input_dir: Path, psycho_indices: list, out_root_path: Path):
     """
     核心处理逻辑：读取CSV，根据解析结果重塑为长表，并保存。
@@ -169,10 +168,16 @@ def process_data(input_dir: Path, psycho_indices: list, out_root_path: Path):
             print(f"    正在读取: {file_path}")
             
             # 加载CSV
-            df = pd.read_csv(file_path, index_col=0).rename_axis("subject_id")
-            df.index = df.index.astype(str) # 确保索引为字符串
+            df = pd.read_csv(file_path)
+            # 检查是否存在 'subject_id' 列
+            if 'subject_id' not in df.columns:
+                raise KeyError(f"文件 '{file_name}' 中缺失 'subject_id' 列，无法对齐数据。")
             
-            # [修改] 添加 'time' 列 (使用整数 1, 2, 3...)
+            # 格式化并设置为索引 (以便 pd.concat 自动对齐)
+            df['subject_id'] = df['subject_id'].astype(str).str.strip() # 转字符串并去空格
+            df = df.set_index('subject_id')
+            
+            # 添加 'time' 列 (使用整数 1, 2, 3...)
             df['time'] = i # e.g., 1, 2, 3
             
             # 重命名 (动态地!)

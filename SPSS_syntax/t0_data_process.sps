@@ -1,0 +1,8 @@
+﻿* Encoding: UTF-8.
+RENAME VARIABLES (Q1 = sex).
+RENAME VARIABLES (Q2 = age).
+RENAME VARIABLES (Q3 = art_exp).
+RENAME VARIABLES (Q4 = color_exp).
+RENAME VARIABLES (Q5 = ipad_exp).
+RENAME VARIABLES (Q6 = health).
+EXECUTE.
