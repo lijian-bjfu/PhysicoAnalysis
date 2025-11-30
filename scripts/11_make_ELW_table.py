@@ -382,6 +382,19 @@ def _build_physio_long(phy: pd.DataFrame) -> pd.DataFrame:
     # t_id 转 Int64
     if "t_id" in long_df.columns:
         long_df["t_id"] = pd.to_numeric(long_df["t_id"], errors="coerce").astype("Int64")
+
+    # 建立 phase 分类变量
+    # 获取预定义的顺序
+    phase_order = ["baseline","induction","intervention"]
+    
+    # 创建映射字典: { 'baseline': 1, 'induction': 2, ... }
+    # start=1 表示从 1 开始编号
+    phase_map = {name: i for i, name in enumerate(phase_order, start=1)}
+    
+    # 执行映射，生成新的数字列 phase_level_code
+    # 如果 phase_level 中有不在 map 里的值（比如 gap），会变成 NaN
+    long_df["phase_level_code"] = long_df["phase_level"].map(phase_map)
+    
     return long_df
 
 def _merge_psycho_into_long(long_df: pd.DataFrame, psy: pd.DataFrame) -> pd.DataFrame:

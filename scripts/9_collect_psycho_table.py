@@ -134,65 +134,7 @@ def parse_psycho_indices_old(psycho_indices: list):
     base_time_vars = sorted(list(base_time_vars_set))
     return time_points, rename_maps, static_vars, base_time_vars
 
-def parse_psycho_indices(psycho_indices: list):
-    """
-    按规则解析 'psycho_indices'。
-    [修改] 静态变量 (static_vars) 强制绑定到 't0'，并确保 't0' 被包含在处理列表中。
-    """
-    
-    time_vars_by_base = defaultdict(list)
-    static_vars = []
-    
-    # 1. 解析
-    regex = re.compile(r"^(t\d+)_(.+)") 
-    for var in psycho_indices:
-        match = regex.match(var)
-        if match:
-            prefix = match.group(1)      # e.g., 't1'
-            base_name = match.group(2)   # e.g., 'STAI_Mean'
-            time_vars_by_base[base_name].append((prefix, var)) 
-        else:
-            static_vars.append(var) # e.g., 'sex', 'age'
-
-    # 2. 收集所有发现的时间点前缀
-    base_names = list(time_vars_by_base.keys())
-    if base_names:
-        # 获取第一个指标的前缀集合作为基准
-        expected_prefixes = {p[0] for p in time_vars_by_base[base_names[0]]}
-    else:
-        expected_prefixes = set()
-
-    # [新增] 如果有静态变量，强制添加 't0' 到预期时间点中
-    if static_vars:
-        if 't0' not in expected_prefixes:
-            print(f"[提示] 检测到静态指标 {static_vars}，将自动从 't0.csv' 读取。", file=sys.stderr)
-            expected_prefixes.add('t0')
-
-    # 3. 排序
-    # 按数字大小排序 (t0, t1, t2...)
-    time_points = sorted(list(expected_prefixes), key=lambda p: int(p[1:])) 
-
-    # 4. 构建映射
-    rename_maps = defaultdict(dict)
-    base_time_vars_set = set()
-    
-    # 处理带前缀的时间性指标
-    for base_name, vars_list in time_vars_by_base.items():
-        base_time_vars_set.add(base_name)
-        for (prefix, full_var_name) in vars_list:
-            rename_maps[prefix][full_var_name] = base_name
-            
-    # [修改] 处理非时间性指标 -> 映射到 't0'
-    if static_vars:
-        target_tp = 't0'
-        # 即使 t0 没有被前面的逻辑加入（例如只有静态变量），这里也确保它在 map 中
-        for var in static_vars:
-            rename_maps[target_tp][var] = var
-    
-    base_time_vars = sorted(list(base_time_vars_set))
-    return time_points, rename_maps, static_vars, base_time_vars
-
-def process_data(input_dir: Path, psycho_indices: list, out_root_path: Path):
+def process_data_old(input_dir: Path, psycho_indices: list, out_root_path: Path):
     """
     核心处理逻辑：读取CSV，根据解析结果重塑为长表，并保存。
     """
@@ -280,6 +222,181 @@ def process_data(input_dir: Path, psycho_indices: list, out_root_path: Path):
         print(f"[错误] 键错误: {e}。很可能 'psycho_indices' 中定义的列名与CSV文件中的列名不匹配。", file=sys.stderr)
     except Exception as e:
         print(f"[严重错误] 处理数据时发生意外错误: {e}", file=sys.stderr)
+
+def parse_psycho_indices(psycho_indices: list):
+    """
+    解析 'psycho_indices'。
+    逻辑更新：
+    1. 识别时间点前缀 (t0, t1...)。
+    2. 收集所有静态变量 (static_vars)，不绑定特定时间点。
+    """
+    
+    time_vars_by_base = defaultdict(list)
+    static_vars = []
+    
+    # 1. 解析变量名
+    regex = re.compile(r"^(t\d+)_(.+)") 
+    for var in psycho_indices:
+        match = regex.match(var)
+        if match:
+            prefix = match.group(1)      # e.g., 't1'
+            base_name = match.group(2)   # e.g., 'STAI_Mean'
+            time_vars_by_base[base_name].append((prefix, var)) 
+        else:
+            static_vars.append(var) # e.g., 'sex', 'Flow'
+
+    # 2. 收集所有时间点
+    base_names = list(time_vars_by_base.keys())
+    if base_names:
+        expected_prefixes = {p[0] for p in time_vars_by_base[base_names[0]]}
+    else:
+        expected_prefixes = set()
+
+    # [泛化策略] 如果有静态变量，需要扫描可能存在的 t0-t3 文件。
+    # 为了保险，至少确保 t0, t1, t2, t3 (如果有动态变量暗示了最大值) 都被检查。
+    # 这里简化处理：如果发现了 t1, t2，通常也应该检查 t0 (基本信息) 和 t3 (结束问卷)。
+    # 简单的做法：把 t0 强制加进去（通常基本信息都在这），如果还有其他时间点，后续逻辑会处理。
+    if static_vars and 't0' not in expected_prefixes:
+        expected_prefixes.add('t0')
+        # 如果 Flow 在 t3，且 t3 没有动态变量，这里可能需要手动把 t3 加进去。
+        # 但通常 t3 会有状态变量。如果 t3 纯粹只有 Flow，请确保 t3 被加入集合。
+        # 假设：用户的数据通常 t1-t3 都有动态指标。如果没有，下面的逻辑也能容错。
+
+    # 3. 排序
+    time_points = sorted(list(expected_prefixes), key=lambda p: int(p[1:])) 
+
+    # 4. 构建动态变量映射 (静态变量不再放入 rename_maps)
+    rename_maps = defaultdict(dict)
+    base_time_vars_set = set()
+    
+    for base_name, vars_list in time_vars_by_base.items():
+        base_time_vars_set.add(base_name)
+        for (prefix, full_var_name) in vars_list:
+            rename_maps[prefix][full_var_name] = base_name
+            
+    base_time_vars = sorted(list(base_time_vars_set))
+    return time_points, rename_maps, static_vars, base_time_vars
+
+def process_data(input_dir: Path, psycho_indices: list, out_root_path: Path):
+    """
+    核心处理逻辑：读取CSV，重塑为长表。
+    [修改] 泛化处理静态变量：只要CSV里有 settings 定义的静态变量，就保留。
+    """
+    try:
+        print(f"--- 1. 正在解析 'psycho_indices' 列表... ---")
+        time_points, rename_maps, static_vars, base_time_vars = parse_psycho_indices(psycho_indices)
+        
+        if not time_points:
+            print("[致命错误] 未找到任何时间点，程序终止。", file=sys.stderr)
+            return
+
+        OUT_FILE = out_root_path / "psycho.csv"
+        out_root_path.mkdir(parents=True, exist_ok=True)
+        
+        print(f"    将扫描的时间点文件: {time_points}")
+        print(f"    需要寻找的静态指标: {static_vars}")
+
+        print("\n--- 2. 正在加载CSV文件... ---")
+        all_dfs = []
+        
+        for time_point in time_points: 
+            file_name = f"{time_point}.csv" 
+            file_path = input_dir / file_name
+            
+            if not file_path.exists():
+                print(f"    [跳过] 文件不存在: {file_name}")
+                continue
+
+            print(f"    正在读取: {file_path}")
+            
+            # 读取原始数据
+            df = pd.read_csv(file_path)
+            
+            if 'subject_id' not in df.columns:
+                raise KeyError(f"文件 '{file_name}' 中缺失 'subject_id' 列。")
+            
+            # 设索引
+            df['subject_id'] = df['subject_id'].astype(str).str.strip() 
+            df = df.set_index('subject_id')
+            
+            # 提取时间 time
+            try:
+                time_num = int(re.search(r'\d+', time_point).group())
+            except:
+                time_num = 0 
+            df['time'] = time_num 
+            
+            # --- 核心修改开始 ---
+            
+            # 1. 动态变量重命名
+            # 获取当前时间点应该有的动态变量映射 (e.g., {'t1_STAI': 'STAI'})
+            current_rename_map = rename_maps.get(time_point, {})
+            df = df.rename(columns=current_rename_map)
+            
+            # 2. 筛选列：只保留 (time) + (重命名后的动态变量) + (当前文件里存在的静态变量)
+            
+            # A. 想要保留的动态列 (base_time_vars 中存在于当前 df 的)
+            cols_to_keep = ['time']
+            for col in df.columns:
+                if col in current_rename_map.values(): # 是重命名后的动态变量
+                    cols_to_keep.append(col)
+            
+            # B. 想要保留的静态列 (static_vars 中存在于当前 df 的)
+            found_static = []
+            for static_var in static_vars:
+                if static_var in df.columns:
+                    cols_to_keep.append(static_var)
+                    found_static.append(static_var)
+            
+            if found_static:
+                print(f"      -> 发现静态指标: {found_static}")
+            
+            # 只保留有用列，避免无关数据混入
+            df = df[cols_to_keep]
+            
+            # --- 核心修改结束 ---
+
+            all_dfs.append(df)
+
+        print("    CSV文件加载完毕。")
+
+        # --- 3. 合并 ---
+        # outer join 会自动处理缺失：
+        # t0 行会有 sex, age, 但 Flow 为空
+        # t3 行会有 Flow, 但 sex, age 为空
+        df_long = pd.concat(all_dfs, join='outer', ignore_index=False)
+        df_long = df_long.reset_index()
+        
+        print("    已合并为长表。正在填充静态变量...")
+
+        # --- [新增] 静态变量填充 ---
+        # 现在的长表里，t0行有sex没flow，t3行有flow没sex。
+        # 需要让同一个 subject_id 的所有行，都拥有这些静态值。
+        # 使用 groupby + first/ffill/bfill 来把静态值广播到该人的所有行。
+        
+        # 对每一个静态变量进行组内填充
+        for static_var in static_vars:
+            if static_var in df_long.columns:
+                # transform('first') 会找到该组第一个非空值，并赋给全组
+                # 注意：前提是同一个人的静态变量在不同时间点是一样的（或者只出现一次）
+                df_long[static_var] = df_long.groupby('subject_id')[static_var].transform('first')
+
+        # --- 4. 清理 ---
+        final_cols = ['subject_id', 'time'] + base_time_vars + static_vars
+        df_final = df_long.reindex(columns=final_cols)
+        df_final = df_final.sort_values(by=['subject_id', 'time'])
+
+        # --- 5. 保存 ---
+        df_final.to_csv(OUT_FILE, index=False)
+        
+        print("\n--- 3. 处理完成 ---")
+        print(f"    最终长表保存至: {OUT_FILE}")
+        print(df_final.head(10)) # 打印多一点看看填充效果
+        
+    except Exception as e:
+        print(f"[严重错误] {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
 
 def main():
     print("--- 心理数据 (SPSS -> 长表) 自动化处理脚本 (v5) ---")
