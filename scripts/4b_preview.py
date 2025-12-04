@@ -29,7 +29,8 @@ SRC_NORM_DIR = (DATA_DIR / paths["norm"]).resolve()
 OUT_ROOT = (DATA_DIR / paths["preview"] ).resolve()
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
 PRE_SID: List = DS["preview_sids"] # 选择 PRE_SID[0]
-PRE_SIG: List = DS["windowing"]["apply_to"] # 选择列表中的所有信号
+# PRE_SIG: List = DS["windowing"]["apply_to"] # 选择列表中的所有信号
+PRE_SIG: List =["rr"] # 选择列表中的所有信号
 
 FILE_TYPES = ["csv", "parquet"]
 
@@ -45,15 +46,44 @@ BR_FORCE_YLIM = (6, 30)
 RESP_MAX_BPM = 30
 # ecg 放大图的起点（make_windowing_ecg_plot），事件名或具体时间点选其一
 ECG_PlOT_START_EVENT = None
-ECG_PLOT_START = 266800
+ECG_PLOT_START = 330662
 # ecg 放大图时窗口的大小，
-ECG_PLOT_SPAN = 180.0
+ECG_PLOT_SPAN = 200.0
 
 # 不按照系统设定，临时检查文件
 # SRC_DIR = (DATA_DIR / paths["confirmed"])
-PRE_SID = ["P011S001T001R001","P012S001T001R001","P013S001T002R001","P014S001T001R001","P015S001T002R001",]
-# PRE_SID = ["P009S001T001R001"]
-# PRE_SIG = ["rr"]
+PRE_SID = [
+    "P006S001T002R001",
+    "P007S001T001R001",
+    "P008S001T002R001",
+    "P009S001T001R001",
+    "P010S001T002R001",
+    "P011S001T001R001",
+    "P012S001T001R001",
+    "P013S001T002R001",
+    "P014S001T001R001",
+    "P015S001T002R001",
+    "P016S001T001R001",
+    "P017S001T001R001",
+    "P018S001T001R001",
+    "P019S001T001R001",
+    "P020S001T001R001",
+    "P021S001T001R001",
+    "P022S001T001R001",
+    "P023S001T001R001",
+    "P024S001T002R001",
+    "P025S001T002R001",
+    "P026S001T002R001",
+    "P027S001T002R001",
+    "P028S001T002R001",
+    "P029S001T002R001",
+    "P030S001T002R001",
+    "P031S001T002R001",
+    ]
+PRE_SIG = ["rr"]
+
+# PRE_SID = ["P028S001T002R001"]
+# PRE_SIG = ["rr","ecg"]
 
 # Use SCHEMA-defined canonical column names first, then fallback heuristics
 def _get_time_col(df: pd.DataFrame, signal: str) -> Optional[str]:

@@ -49,7 +49,17 @@ local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文
 
 操作方法：`4a_clean_rr.py`
 
-该脚本用于处理rr数据中的异常尖峰。操作的数据对象为 confirmed rr。执行该脚本前必须先执行 `3_select_rr.py`，并且在rr_select/路径下有decision.csv文件。`4b_clean_rr.py`会根据该文件中标注为来自 device_rr 的数据进行分析。分析后会给出一份汇总报告 `clean_rr_summary.csv`, 标注对哪些被试的 RR 数据进行处理。n_segments 表示在该被试 RR 中识别到的“短时尖峰短段”的数量。n_corrected 表示需处理的搏点个数之和。ratio_corrected 表示n_corrected / 全部 RR 点数 的比例。warning 当数据糟糕到一定程度会提醒，例如异常短段数达到提醒阈值（默认 4）或需修正搏点占比达到提醒阈值（默认 0.05）
+该脚本用于处理rr数据中的异常尖峰。操作的数据对象为 confirmed rr。执行该脚本前必须先执行 `3_select_rr.py`，并且在rr_select/路径下有decision.csv文件。`4b_clean_rr.py`会根据该文件中标注为来自 device_rr 的数据进行分析。分析后会给出一份汇总报告 `clean_rr_summary.csv`, 
+
+脚本有四种清理方法，分别为
+- "interp": 使用neurokit2 的插值方法处理
+- "split" : 针对那种漏检的情况，例如 700, 1400, 700 在这个情况下，一般1400是这个点是漏检了一个700，所以要先把这个值拆成两个700。
+- "delete": 已识别的短段直接删除，不做插值
+- "fill": 删掉一个异常点，用前后两个点的平均值替换
+
+这些方法需要在全局变量 RR_REPAIR_METHOD  = [] 来设定。注意，如果数组中包含了 split 方法，一定会先处理此类数据。
+
+标注对哪些被试的 RR 数据进行处理。n_segments 表示在该被试 RR 中识别到的“短时尖峰短段”的数量。n_corrected 表示需处理的搏点个数之和。ratio_corrected 表示n_corrected / 全部 RR 点数 的比例。warning 当数据糟糕到一定程度会提醒，例如异常短段数达到提醒阈值（默认 4）或需修正搏点占比达到提醒阈值（默认 0.05）
 
 处理后的 RR 会覆盖之前的confirmed rr。
 

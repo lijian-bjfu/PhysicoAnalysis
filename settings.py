@@ -77,9 +77,9 @@ PARAMS = {
     "resp_assume_uniform": False,
     
     # —— RR 短时尖峰清理参数（仅供 clean_rr 使用；不影响其他流程） ——
-    # 最长“短时尖峰”连续长度（搏点数）。仅当 1 ≤ 段长 ≤ 本阈值时才自动修复，
-    # 超出则只记录到 QC，不改变原始 RR。
-    "rr_short_run_max_beats": 5,
+    # rr_short_run_max_beats 设置最长“短时尖峰”连续长度（搏点数）。仅当 1 ≤ 段长 ≤ 本阈值时才自动修复，
+    # 超出则只记录到 QC，不改变原始 RR。注意：该值太小会修不完，太大容易把正常起伏也拉平
+    "rr_short_run_max_beats": 10,
 
     # 逐搏差的绝对阈值（毫秒）。|RR[i] − RR[i−1]| 大于该值将被视作候选异常，
     # 与相对偏差阈（rr_artifact_threshold）共同作用，增强鲁棒性。
