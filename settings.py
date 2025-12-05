@@ -272,7 +272,7 @@ DATASETS = {
                             "name": "g_recovery",
                             "start_event": "intervention_end",
                             "end_event": "p3",
-                            "inset": 2
+                            "inset": 10
                         }
                     ]
                 },
@@ -321,24 +321,24 @@ DATASETS = {
             # "sd1_ms",
             # "sd2_ms",
             # *-- rsa 特征 --*
-            "rsa_ms",
-            "rsa_log_ms",
-            "resp_amp",
-            "resp_log_amp",
-            "resp_rate_bpm",
+            # "rsa_ms",
+            # "rsa_log_ms",
+            # "resp_amp",
+            # "resp_log_amp",
+            # "resp_rate_bpm",
             # "n_breaths_used",
             # "rsa_method",
             # *-- 运动 acc" --*
             # enmo 表示瞬时的运动强度
             # motion_frac表示是否处于运动状态
-            "acc_enmo_mean",
+            # "acc_enmo_mean",
             # "acc_motion_frac",
             # *-- 去中心化列 --*
             # ws 表示基于基线偏移值
             # bs 表示每个被试自己的跨时点平均
-            "acc_enmo_mean_ws",
+            # "acc_enmo_mean_ws",
             # "acc_motion_frac_ws",
-            "resp_rate_bpm_ws",
+            # "resp_rate_bpm_ws",
             # "acc_enmo_mean_bs",
             # "acc_motion_frac_bs",
             # "resp_rate_bpm_bs",
@@ -375,7 +375,7 @@ DATASETS = {
             "age",
             "art_exp",
             "color_exp",
-            "color_join",
+            "art_join",
             "ipad_exp",
             "health",
         ]
