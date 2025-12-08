@@ -174,16 +174,25 @@ make_windowing_ecg_plot(
 	- 很适合在 Excel 里按行画图，看个体的时间趋势是否和组均值方向一致，谁是“反向运动员”
 
 - 谁在放大整体方差：全局层面
-    - variance_influence_overall_hf_log_ms2_by_subject_id.csv
-    - n：该被试数据点个数
-	- mean：该被试的平均水平
-	- sd：该被试的标准差
-	- mean_diff_from_overall：被试均值减去总体均值
-	- between_ss_contrib：此被试在 Between SS 中的那一项 n_i (\bar{y}_i - \bar{y})^2
-	- between_ss_contrib_pct_of_between：该被试贡献 / 被试间平方和
-	- between_ss_contrib_pct_of_total：该被试贡献 / 总平方和
-	- mean_z_across_subjects：以“被试均值”在被试群体内计算 Z 分数，帮助识别极端高低值被试
-    - 文件已经按 between_ss_contrib_pct_of_total 从大到小排序，反映了“对总体方差贡献最大的几个被试”
+	- variance_influence_overall_hf_log_ms2_by_subject_id.csv
+    该表中各列含义如下（以任意一个生理指标为例）：
+	- n：
+    该被试在当前分析中纳入的观测点数量（例如窗口个数或时间点个数）。
+	- mean：
+    该被试在当前条件下，该指标在其全部观测点上的平均水平。
+	- sd：
+    该被试在当前条件下，该指标在其全部观测点上的标准差，用于反映该被试“在自己身上”的波动程度。
+	- mean_diff_from_overall：
+    被试均值减去总体均值（该条件下所有被试合并后的平均值）。数值为正表示该被试水平高于总体均值，为负表示低于总体均值，反映该被试相对整体是“偏高”还是“偏低”。
+	- between_ss_contrib：
+    该被试在“被试间平方和”中的贡献，数值越大，说明该被试由于“均值离总体均值较远”且“观测点较多”，在放大被试之间差异方面的作用越大。
+	- between_ss_contrib_pct_of_between：
+    该被试在被试间平方和（between-subject SS）中的占比，表示在“所有被试均值之间的差异”中，该被试贡献了多少比例，反映其在被试间差异中的相对重要性。
+	- between_ss_contrib_pct_of_total：
+    该被试在总平方和（total SS）中的占比，表示在当前条件下该指标的全部变动中，有百分之多少是由“该被试的均值偏离整体均值”造成的。数值越大，该被试对整体方差的拉动越明显。
+	- mean_z_across_subjects：
+    以“被试均值”为单位，在被试群体内部计算的 Z 分数。Z 值为正说明该被试均值高于被试均值分布的平均水平，为负说明较低。例如 Z = -2.1 表示该被试的均值比被试群体的平均均值低约 2.1 个标准差，有助于识别极端高低值被试。
+	- 该文件已经按 between_ss_contrib_pct_of_total 从大到小排序，表头靠前的被试即为“对整体方差贡献最大的几个被试”，可以作为后续敏感性分析和数据质量检查的重点对象。
 
 - 分条件组内：谁在拖累本组的方差
     - variance_influence_by_task_hf_log_ms2_by_subject_id.csv
@@ -193,6 +202,15 @@ make_windowing_ecg_plot(
 - 分条件组内的被试轨迹图
     - traj_rmssd_ms_by_subject_id_and_t_id_cond_click.png
     - 在实验组内部，是不是大部分被试都按“理论方向”变化（例如 T2 上升，T3 下降），比较控制组是不是完全躺平或反向
+
+- 斜率比较宽表
+    - slope_rmssd_ms_by_subject_id_intervals.csv
+    - sl_1_2：该被试在 T1→T2 的变化幅度（如果 t_id 间隔为 1 就等于 T2 − T1）。
+	- grp_sl_1_2：同一 task 下，所有被试 T1→T2 斜率的平均值。
+	- d_sl_1_2：该被试与组平均斜率的差值。
+        - 正值：比组平均“更往上”；
+        - 负值：比组平均“更往下”；
+        - 绝对值越大，表示该被试在这个区间的趋势越“反常”。
 
 上述这些分析结果可用于对数据进行基本评估。包括：
 

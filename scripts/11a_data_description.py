@@ -54,6 +54,8 @@ def _describe_by_subject(df: pd.DataFrame, var: str, subject_col: str) -> pd.Dat
         std="std",
         count="count",
     ).reset_index()
+    # 对仅有 1 个观测值的被试，将 std 视为 0，便于后续计算 CV
+    desc.loc[desc["count"] <= 1, "std"] = 0.0
     # 变异系数：标准差 / 均值；均值为 0 时设为 NaN
     desc["cv"] = desc["std"] / desc["mean"].replace({0: np.nan})
     return desc
@@ -69,6 +71,8 @@ def _describe_by_subject_time(df: pd.DataFrame, var: str, subject_col: str, time
         std="std",
         count="count",
     ).reset_index()
+    # 对仅有 1 个观测值的 被试×时间 组合，将 std 视为 0
+    desc.loc[desc["count"] <= 1, "std"] = 0.0
     desc["cv"] = desc["std"] / desc["mean"].replace({0: np.nan})
     return desc
 
@@ -269,6 +273,82 @@ def _plot_subject_time_trajectories(df: pd.DataFrame, var: str, subject_col: str
     return fig_info
 
 
+def _subject_interval_slopes_wide(
+    df: pd.DataFrame,
+    var: str,
+    subject_col: str,
+    time_col: str,
+    cond_col: str,
+) -> pd.DataFrame:
+    """
+    本函数对每个被试、每个相邻时间区间计算斜率（sl_*），组斜率（grp_*）以及差值（d_*），结果为宽表，每行一个被试。
+    """
+    data = df[[subject_col, cond_col, time_col, var]].copy()
+    data = data.replace([np.inf, -np.inf], np.nan)
+    data = data.dropna(subset=[subject_col, cond_col, time_col, var])
+    agg = data.groupby([cond_col, subject_col, time_col])[var].mean().reset_index(name="mean")
+
+    unique_times = sorted(agg[time_col].unique())
+    if len(unique_times) < 2:
+        return pd.DataFrame()
+
+    def _time_label(x):
+        s = str(x)
+        if s.endswith(".0"):
+            return s[:-2]
+        return s
+
+    intervals = []
+    for i in range(len(unique_times) - 1):
+        t1 = unique_times[i]
+        t2 = unique_times[i + 1]
+        lab = f"{_time_label(t1)}_{_time_label(t2)}"
+        intervals.append((t1, t2, lab))
+
+    rows = []
+    for cond_value, sub_df in agg.groupby(cond_col):
+        pivot = sub_df.pivot(index=subject_col, columns=time_col, values="mean")
+        pivot = pivot.reindex(columns=unique_times)
+
+        slope_cols = {}
+        for t1, t2, lab in intervals:
+            dt = float(t2) - float(t1)
+            if dt == 0:
+                dt = 1.0
+            slope = (pivot[t2] - pivot[t1]) / dt
+            slope_cols[f"sl_{lab}"] = slope
+        slopes_df = pd.DataFrame(slope_cols, index=pivot.index)
+
+        group_slope = slopes_df.mean(axis=0, skipna=True)
+        grp_df = pd.DataFrame(
+            {f"grp_{col}": group_slope[col] for col in slopes_df.columns},
+            index=slopes_df.index,
+        )
+        diff_df = slopes_df.sub(group_slope, axis=1)
+        diff_df = diff_df.rename(columns={col: f"d_{col}" for col in diff_df.columns})
+
+        out = pd.concat([slopes_df, grp_df, diff_df], axis=1)
+        out.insert(0, cond_col, cond_value)
+        out.index.name = subject_col
+        out = out.reset_index()
+        rows.append(out)
+
+    if not rows:
+        return pd.DataFrame()
+    return pd.concat(rows, ignore_index=True)
+
+
+def _round_numeric(df: pd.DataFrame, digits: int = 3) -> pd.DataFrame:
+    """
+    将 DataFrame 中所有数值列按指定小数位数进行四舍五入，不修改非数值列。
+    """
+    df = df.copy()
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    if len(num_cols) > 0:
+        df[num_cols] = df[num_cols].round(digits)
+    return df
+
+
 def main():
     print(f"[info] 读取长表数据: {LONGTABLE}")
     df = pd.read_csv(LONGTABLE)
@@ -295,27 +375,39 @@ def main():
 
         # 1. 每个被试的描述统计
         by_subj = _describe_by_subject(df, var, subject_id)
+        by_subj = _round_numeric(by_subj, digits=3)
         out1 = SRC_DIR / f"desc_{var}_by_{subject_id}.csv"
         by_subj.to_csv(out1, index=False)
         output_files.append((out1, f"{var} 每被试总体描述（均值/标准差/CV）"))
 
         # 2. 每个被试 × 时间窗口 的描述统计
         by_subj_time = _describe_by_subject_time(df, var, subject_id, time)
+        by_subj_time = _round_numeric(by_subj_time, digits=3)
         out2 = SRC_DIR / f"desc_{var}_by_{subject_id}_and_{time}.csv"
         by_subj_time.to_csv(out2, index=False)
         output_files.append((out2, f"{var} 每被试 × 时间窗口 描述（均值/标准差/CV）"))
 
         # 3. 全局范围内，每个被试对方差的影响
         inf_overall = _subject_variance_influence(df, var, subject_id)
+        inf_overall = _round_numeric(inf_overall, digits=3)
         out3 = SRC_DIR / f"variance_influence_overall_{var}_by_{subject_id}.csv"
         inf_overall.to_csv(out3, index=False)
         output_files.append((out3, f"{var} 全局方差分解：各被试贡献"))
 
         # 4. 在每个条件组内的方差贡献
         inf_by_cond = _subject_variance_influence_by_condition(df, var, subject_id, condition)
+        inf_by_cond = _round_numeric(inf_by_cond, digits=3)
         out4 = SRC_DIR / f"variance_influence_by_{condition}_{var}_by_{subject_id}.csv"
         inf_by_cond.to_csv(out4, index=False)
         output_files.append((out4, f"{var} 分条件方差分解：各被试贡献"))
+
+        # 5. 每个被试 × 相邻时间区间的斜率（宽表）
+        slopes_wide = _subject_interval_slopes_wide(df, var, subject_id, time, condition)
+        if not slopes_wide.empty:
+            slopes_wide = _round_numeric(slopes_wide, digits=3)
+            out5 = SRC_DIR / f"slope_{var}_by_{subject_id}_intervals.csv"
+            slopes_wide.to_csv(out5, index=False)
+            output_files.append((out5, f"{var} 斜率描述（每被试 × 相邻时间区间，宽表）"))
 
         traj_figs = _plot_subject_time_trajectories(df, var, subject_id, time, condition, SRC_DIR)
         output_files.extend(traj_figs)

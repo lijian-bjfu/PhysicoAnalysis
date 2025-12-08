@@ -68,6 +68,7 @@ HR_LABEL = "HR (bpm)"
 RR_LABEL = "RR interval (ms)"
 T_LABEL_ABS = "Time (s)"
 T_LABEL_REL = "Time since window start (s)"
+GAP_SECONDS = 20.0  # gap between windows in per-subject RR overview (s)
 
 # ensure output dir exists
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -181,6 +182,81 @@ def plot_rr_per_subject_for_window(win_id: str, sids: list[str]) -> None:
         fig.savefig(out_path, dpi=220)
         plt.close(fig)
         print(f"[ok] saved {out_path}")
+
+
+# --------- new: overview RR plot across all windows for a subject ---------
+def plot_rr_all_windows_for_subject(sid: str, win_ids: list[str]) -> None:
+    """
+    For a subject, plot RR tachogram across all windows, concatenated with a fixed gap.
+    Each window's RR data is shifted in x by an accumulating offset plus GAP_SECONDS between windows.
+    Vertical dashed lines and labels are drawn at window boundaries.
+    Saves as {sid}_rr_across_windows.png in OUT_DIR.
+    """
+    segments = []
+    window_offsets = []
+    offset = 0.0
+    rr_ranges = []
+    for win_id in win_ids:
+        path = _rr_path_for(sid, win_id)
+        df = _load_rr_df(path)
+        if df is None or df.empty:
+            window_offsets.append(None)
+            continue
+        df = df.sort_values("t_s_relative").copy()
+        x = df["t_s_relative"] + offset
+        seg = df.copy()
+        seg["x"] = x
+        segments.append(seg)
+        rr_ranges.append((seg["rr_ms"].min(), seg["rr_ms"].max()))
+        window_offsets.append(offset)
+        offset += seg["t_s_relative"].max() + GAP_SECONDS
+    if not segments:
+        print(f"[info] no RR data for subject {sid} across any window")
+        return
+    # Concatenate all segments
+    all_df = pd.concat(segments, axis=0, ignore_index=True)
+    # Determine y-limits with 5% padding
+    ymin = float(min(r[0] for r in rr_ranges))
+    ymax = float(max(r[1] for r in rr_ranges))
+    pad = 0.05 * (ymax - ymin) if ymax > ymin else 10.0
+    y0, y1 = ymin - pad, ymax + pad
+    # Calculate boundary midpoints between windows
+    boundaries = []
+    for i in range(len(window_offsets) - 1):
+        o1 = window_offsets[i]
+        o2 = window_offsets[i + 1]
+        if o1 is not None and o2 is not None:
+            # The gap is between end of window i and start of window i+1
+            last_seg = segments[len(boundaries)]
+            last_xmax = last_seg["x"].max()
+            next_xmin = segments[len(boundaries)+1]["x"].min()
+            mid = (last_xmax + next_xmin) / 2.0
+            boundaries.append(mid)
+        elif o1 is not None and o2 is None:
+            # missing next window, skip
+            continue
+        elif o1 is None and o2 is not None:
+            # missing prev window, skip
+            continue
+        # both None: both missing, skip
+    # Plot
+    fig, ax = plt.subplots(figsize=(20, 4.5))
+    ax.scatter(all_df["x"], all_df["rr_ms"], s=8, alpha=0.8, linewidths=0, edgecolors="none")
+    ax.set_xlabel(f"{T_LABEL_REL} (concatenated across windows)")
+    ax.set_ylabel(RR_LABEL)
+    ax.set_title(f"RR tachogram across windows | {sid}")
+    ax.set_ylim(y0, y1)
+    ax.grid(True, linestyle=":", linewidth=0.5, alpha=0.6)
+    # Draw vertical lines and annotate at boundaries
+    for mid in boundaries:
+        ax.axvline(mid, color="gray", linestyle="--", linewidth=1.1, alpha=0.6)
+        ax.text(mid, y1 - 0.04*(y1-y0), "window boundary", ha="center", va="top", rotation=90,
+                color="gray", fontsize=10, alpha=0.8, backgroundcolor="white")
+    fig.tight_layout()
+    out_path = OUT_DIR / f"{sid}_rr_across_windows.png"
+    fig.savefig(out_path, dpi=220)
+    plt.close(fig)
+    print(f"[ok] saved {out_path}")
 
 def plot_ecg_per_subject_for_window(win_id: str, sid: list[str]) -> None:
     """
@@ -387,6 +463,10 @@ def main() -> None:
         plot_hr_comparison_for_window(win_id, SID)
         plot_rr_per_subject_for_window(win_id, SID)
         plot_ecg_per_subject_for_window(win_id, SID)
+
+    print("\n[subject-level RR overview]")
+    for sid in SID:
+        plot_rr_all_windows_for_subject(sid, WIN)
 
 if __name__ == "__main__":
     main()
