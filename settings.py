@@ -207,7 +207,7 @@ DATASETS = {
                 # 三选一：给 [start_s,end_s]；或 [start_s,win_len_s]；
                 # 时间按照相对值设置，例如开始时间设为 12，
                 # 会从数据开始位置向后偏移12秒作为切窗开始
-                "single": {"start_s": None, "end_s": None, "win_len_s": 300},
+                "single": {"start_s": 60, "end_s": None, "win_len_s": None},
 
                 # 3) 滑窗：在 [start_s,end_s] 范围内按 win_len/stride 切窗
                 # 时间按照相对值设置。例如开始时间设为 12, 
@@ -246,9 +246,9 @@ DATASETS = {
                         },
                         {
                             "name": "g_t1",
-                            "start_event": "p0",
-                            "end_event": "p1",
-                            "inset": 2
+                            "start_event": "baseline_start",
+                            "end_event": "p0",
+                            "inset": 10
                         },
                         {
                             "name": "p_induction",
@@ -260,7 +260,7 @@ DATASETS = {
                             "name": "g_t2",
                             "start_event": "stim_end",
                             "end_event": "p2",
-                            "inset": 2
+                            "inset": 10
                         },
                         {
                             "name": "p_intervention",
@@ -272,7 +272,7 @@ DATASETS = {
                             "name": "g_recovery",
                             "start_event": "intervention_end",
                             "end_event": "p3",
-                            "inset": 10
+                            "inset": 20
                         }
                     ]
                 },

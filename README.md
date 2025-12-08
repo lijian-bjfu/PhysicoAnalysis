@@ -93,6 +93,8 @@ make_windowing_ecg_plot(
 
 `method`设置切窗方法，包括全切与细分2种（cover / subdivide）。全切不考虑切窗历史，细分则考虑上一次切窗历史，对上一次切窗结果中的某一部分进行再次切窗。第一次cover的结果会放在 processed/windowing/local/level1下。对上一次切窗结果的每次“细分”切窗会自动增加一极level。每次切窗会生成一个log文件供使用者追溯各切窗之间的关系，以及一个index文件便于后续对所有的窗口的整合组装。
 
+选择 subdivide 模式会需要在终端进行一些交互处理。要求手动选中“某一层的某一个窗口文件”，代码据此识别是哪个窗口（w03 / w04…），然后在这一层的 index.csv 里找到所有被试的同一个父窗口区间，对所有被试在同一父窗内统一做“二次切窗”。
+
 `use`设置切窗策略，可选策略包括根据事件信息切窗、切单窗、滑窗、事件+单窗、事件+滑窗、单窗+滑窗，(events / single / sliding / events_offset / events_sliding / single_sliding) 共6种。使用 events 切窗需要事件表，在 `events_path`下设置路径。开始时间为相对位置，例如start_s 设置为12，会从数据12秒的位置作为切窗开始位置。
 
 推荐使用 `events_labeled_windows` 方法。该方法根据顺序与事件名来精确定义窗口。用户根据 events 列表中的事件顺序，在settings中逐一写下每窗的起始事件标签。
@@ -159,6 +161,55 @@ make_windowing_ecg_plot(
 该脚本针对包含测试中与测试后的复杂切窗模型设计的。专门用于对使用 settings 中 events_labeled_windows 切窗模式生成的数据进行制表。使用此脚本制表需要在 events_labeled_windows 中 设置窗口的命名规范。由于有测试期（phase）和测试间（gap）之分，测试期表示被试在静息、诱导、干预的整个时间段；测试间表示每个测试期结束，以及下一个测试期开始前，用户的回答问卷以及静止的期间。这两个期间在分析时是按照两套时间维度对待的，因此对制表有特殊的要求。在使用此方法制表时需要为每个窗口名（windows["name"]）有个明确的标注。改标注放在"window_category"的列表里。例如 "p" 表示 phase,那么测试期的窗口名要加上 p_的前缀，如 p_baseline；"g_" 表示 gap, 测试间的窗口名则使用类似 "g_t1" 的名字类型。"psycho_time" 键值表示心理指标测量是在哪个时间类别测量的，比如 "psycho_time" = "g" 表示心理指标是在测试间测量的。程序会根据这些规则来识别不同指标依赖哪些时间，并进行制表。该脚本会制作宽表与长表
 
 宽表数据保存在 data/final/wide_table.csv；长表数据保存在 data/final/long_table.csv
+
+# 对数据结果进行基本数据描述
+分析内容包括
+- 每个被试的均值 / 标准差 / CV
+    - desc_rmssd_ms_by_subject_id.csv
+    - 每一行是一个被试一整个实验期内的总体描述，用来看“这个人整体高还是整体低、稳定不稳定”
+
+- 每个被试 × 时间窗口的描述统计
+    - desc_hf_log_ms2_by_subject_id_and_t_id.csv
+   	- 直接查看某个被试在 T1、T2、T3 各自的均值 / 标准差 / CV。
+	- 很适合在 Excel 里按行画图，看个体的时间趋势是否和组均值方向一致，谁是“反向运动员”
+
+- 谁在放大整体方差：全局层面
+    - variance_influence_overall_hf_log_ms2_by_subject_id.csv
+    - n：该被试数据点个数
+	- mean：该被试的平均水平
+	- sd：该被试的标准差
+	- mean_diff_from_overall：被试均值减去总体均值
+	- between_ss_contrib：此被试在 Between SS 中的那一项 n_i (\bar{y}_i - \bar{y})^2
+	- between_ss_contrib_pct_of_between：该被试贡献 / 被试间平方和
+	- between_ss_contrib_pct_of_total：该被试贡献 / 总平方和
+	- mean_z_across_subjects：以“被试均值”在被试群体内计算 Z 分数，帮助识别极端高低值被试
+    - 文件已经按 between_ss_contrib_pct_of_total 从大到小排序，反映了“对总体方差贡献最大的几个被试”
+
+- 分条件组内：谁在拖累本组的方差
+    - variance_influence_by_task_hf_log_ms2_by_subject_id.csv
+    - 在 “点击填色” 组里，是哪几个被试拉高了组内均值差异？
+	- 在 “笔触涂抹” 组里，是不是另一些人特别极端？
+
+- 分条件组内的被试轨迹图
+    - traj_rmssd_ms_by_subject_id_and_t_id_cond_click.png
+    - 在实验组内部，是不是大部分被试都按“理论方向”变化（例如 T2 上升，T3 下降），比较控制组是不是完全躺平或反向
+
+上述这些分析结果可用于对数据进行基本评估。包括：
+
+- 筛出“极端被试”做敏感性分析
+	- 在 variance_influence_overall_* 里，把 between_ss_contrib_pct_of_total 排序，挑出贡献特别高的 1–2 个被试。
+	- 可以做两套分析：
+	- 全部被试
+	- 排除这些极端被试
+	- 比较组间差异、交互项是否稳定。
+- 对照个体趋势与组均值趋势是否一致
+	- 对 desc_{var}_by_subject_id_and_t_id.csv 中某个变量查看
+	- 对 traj_{var}_by_subject_id_and_t_id_cond_{cond_sanitized}.png 查看
+	- 哪些被试是 T1→T2→T3 按“理论方向”变化；
+	- 哪些人走反了
+- 用 CV 看数据质量
+	- cv 很大而 mean 很小的被试，可能存在噪声特别大的窗或清理不彻底。
+	- 可以把 CV 排序选前若干名，回去看这些被试对应的 RR / ECG 图。
 
 # Z score 分析数据
 

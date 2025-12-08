@@ -449,7 +449,8 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
             # 5. 查找开始事件 (Start Event)
             # 核心逻辑：我们从 "last_search_time_s" 之后开始搜索，
             # 寻找第一个匹配 "start_label" 的事件。
-            start_search_mask = (ev["events"] == start_label) & (ev["time_s"] >= last_search_time_s)
+            # start_search_mask = (ev["events"] == start_label) & (ev["time_s"] >= last_search_time_s)
+            start_search_mask = (ev["events"] == start_label)
             start_row = ev[start_search_mask].iloc[0:1] # .iloc[0:1] 确保没找到时返回空DF而不报错
 
             if start_row.empty:
@@ -460,7 +461,8 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
             # 6. 查找结束事件 (End Event)
             # 核心逻辑：我们从 "t_start" 之后开始搜索 (注意：不是 last_search_time_s)，
             # 寻找第一个匹配 "end_label" 的事件。
-            end_search_mask = (ev["events"] == end_label) & (ev["time_s"] > t_start)
+            # end_search_mask = (ev["events"] == end_label) & (ev["time_s"] > t_start)
+            end_search_mask = (ev["events"] == end_label)
             end_row = ev[end_search_mask].iloc[0:1]
 
             if end_row.empty:
@@ -542,6 +544,7 @@ def build_windows_cover_for_subject(sid: str, cfg: dict) -> list[dict]:
 # subdivide：从父层 index.csv 的相同 w_id 为每个被试推断父窗区间
 def build_windows_subdivide(cfg: dict) -> tuple[list[dict], Path, int, int]:
     parent_example = _choose_file("请选择上一层的某个窗口文件（如 <sid>_rr_w03.csv）")
+
     if not parent_example or not parent_example.exists():
         raise SystemExit("[error] 你没有选择有效的窗口文件，无法细分。")
     parent_dir = parent_example.parent
@@ -596,16 +599,45 @@ def build_windows_subdivide(cfg: dict) -> tuple[list[dict], Path, int, int]:
                 add_child(t, t+w, f"parent[w{parent_w_id:02d}] -> {fmt_s(t)}+{w:.0f}s")
                 t += st
         elif mode == "single":
-            m  = wcfg["modes"]["single"]
-            w  = m.get("win_len_s")
-            anchor = (s0 + e0)/2.0 if m.get("anchor_time_s") is None else float(m.get("anchor_time_s"))
-            s = max(s0, anchor)
-            e = min(e0, s + w) if w else e0
+            # subdivide 场景下的 single 语义：
+            # start_s / end_s / win_len_s 都是**相对父窗起点 s0 的偏移秒数**。
+            # 支持两种用法：[start_s, end_s] 或 [start_s, win_len_s]（二选一），
+            # 若二者都省略，则默认 [start_s, 父窗结束 e0]。
+            m = wcfg["modes"]["single"]
+            off_start = m.get("start_s", None)
+            off_end   = m.get("end_s", None)
+            win_len   = m.get("win_len_s", None)
+
+            if off_start is None:
+                raise SystemExit("[error] subdivide/single 模式需提供 start_s（相对父窗起点的偏移秒数）")
+
+            # 参数合法性检查：end_s 与 win_len_s 不能同时给
+            if (off_end is not None) and (win_len is not None):
+                raise SystemExit("[error] subdivide/single 模式参数冲突：end_s 与 win_len_s 只能二选一。")
+
+            # 子窗起点：父窗起点 + start_s
+            s = s0 + float(off_start)
+
+            # 子窗终点：根据 end_s 或 win_len_s 决定，最后不得超出父窗 e0
+            if off_end is not None:
+                e = min(s0 + float(off_end), e0)
+            elif win_len is not None:
+                e = min(s + float(win_len), e0)
+            else:
+                # 两者都没设，默认切到父窗末尾
+                e = e0
+
+            # 最小时长检查
             min_win = PARAMS["min_window"]
             if (e - s) >= min_win:
-                add_child(s, e, f"parent[w{parent_w_id:02d}] -> single[{fmt_s(s)},{fmt_s(e)}]")
+                add_child(
+                    s, e,
+                    f"parent[w{parent_w_id:02d}] -> single[{fmt_s(s)},{fmt_s(e)}]"
+                )
             else:
-                print(f"[warn] {sid}: 细分single窗口小于最小时长 {min_win}s 被拦截 s={s}, e={e}")
+                print(
+                    f"[warn] {sid}: 细分single窗口小于最小时长 {min_win}s 被拦截 s={s}, e={e}"
+                )
         else:
             # 细分不直接允许 events 再切（避免跨层事件偏差）
             pass

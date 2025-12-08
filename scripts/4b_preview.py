@@ -46,9 +46,9 @@ BR_FORCE_YLIM = (6, 30)
 RESP_MAX_BPM = 30
 # ecg 放大图的起点（make_windowing_ecg_plot），事件名或具体时间点选其一
 ECG_PlOT_START_EVENT = None
-ECG_PLOT_START = 100335
+ECG_PLOT_START = 100050
 # ecg 放大图时窗口的大小，
-ECG_PLOT_SPAN = 300.0
+ECG_PLOT_SPAN = 130.0
 
 # 不按照系统设定，临时检查文件
 # SRC_DIR = (DATA_DIR / paths["confirmed"])
@@ -79,11 +79,20 @@ PRE_SID = [
     "P029S001T002R001",
     "P030S001T002R001",
     "P031S001T002R001",
+    "P032S001T001R001",
+    "P033S001T001R001",
+    "P034S001T001R001",
+    "P035S001T002R001",
+    "P036S001T002R001",
+    "P037S001T002R001",
+    "P038S001T001R001",
     ]
 PRE_SIG = ["rr"]
 
-PRE_SID = ["P030S001T002R001"]
-PRE_SIG = ["rr"]
+# PRE_SID = [
+#     "P034S001T001R001",
+#     ]
+# PRE_SIG = ["rr","ecg"]
 
 # Use SCHEMA-defined canonical column names first, then fallback heuristics
 def _get_time_col(df: pd.DataFrame, signal: str) -> Optional[str]:
