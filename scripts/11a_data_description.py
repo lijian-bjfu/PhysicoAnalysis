@@ -25,6 +25,8 @@ paths = DS["paths"]
 SRC_DIR = (DATA_DIR / paths["final"]).resolve()
 LONGTABLE = (DATA_DIR / paths["final"] / "long_table.csv").resolve()
 WIDETABLE = (DATA_DIR / paths["final"] / "wide_table.csv").resolve()
+OUT_ROOT = (SRC_DIR / "data_description" ).resolve()
+OUT_ROOT.mkdir(parents=True, exist_ok=True)
 # OUT_FILE = ...输出文件放在 SRC_DIR 这个文件夹下，可能有好几个，你来设计名字，名字不要太长
 
 # ！！因变量需要包含在 settings 中的 signal_features 列表中！！
@@ -39,6 +41,51 @@ subject_id = "subject_id"
 condition = "task"
 # 时间变量默认名 t_id, 可切换为 phase_level_code
 time = "t_id"
+# 高亮特定的被试折线
+# 颜色可选示例（matplotlib 基本颜色名称）：
+# 'red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'black', 'cyan'
+# 如需为更多被试定制样式，可在 SID_colormarker 中按 "PXXX" 添加条目，例如：
+# "P012": {"color": "blue", "alpha": 0.8, "linewidth": 2.0}
+SID_colormarker = {
+    # cond 1
+    "P021": {
+        "color": "red",
+        "alpha": 0.9,
+        "linewidth": 2.0,
+    },
+    "P012": {
+        "color": "green",
+        "alpha": 0.9,
+        "linewidth": 2.0,
+    },
+    "P017": {
+        "color": "pink",
+        "alpha": 0.9,
+        "linewidth": 2.0,
+    },
+    "P033": {
+        "color": "brown",
+        "alpha": 0.9,
+        "linewidth": 2.0,
+    },
+    "P007": {
+        "color": "blue",
+        "alpha": 0.9,
+        "linewidth": 2.0,
+    },
+    # cond 2
+    "P030": {
+        "color": "red",
+        "alpha": 0.9,
+        "linewidth": 2.0,
+    },
+    "P026": {
+        "color": "pink",
+        "alpha": 0.9,
+        "linewidth": 2.0,
+    },
+}
+
 
 # ------------------------------------------
 # 数据描述与被试方差影响分析
@@ -217,13 +264,40 @@ def _plot_subject_time_trajectories(df: pd.DataFrame, var: str, subject_col: str
         # 按时间排序
         subdf_sorted = subdf.set_index(time_col).reindex(unique_times).reset_index()
         label = _short_label(subj)
+
+        # 根据被试 ID（例如 "P017"）查找是否有自定义样式
+        # 优先使用缩写形式（PXXX），如果没有，再尝试完整 subject_id 作为键
+        style_key = label
+        style_cfg = SID_colormarker.get(style_key)
+        if style_cfg is None:
+            style_cfg = SID_colormarker.get(str(subj))
+
+        # 默认线条样式
+        line_kwargs = {
+            "linewidth": 0.8,
+            "alpha": 0.3,
+            "marker": "o",
+        }
+        if style_cfg:
+            if "color" in style_cfg:
+                line_kwargs["color"] = style_cfg["color"]
+            if "alpha" in style_cfg:
+                line_kwargs["alpha"] = style_cfg["alpha"]
+            if "linewidth" in style_cfg:
+                line_kwargs["linewidth"] = style_cfg["linewidth"]
+
         if label in seen_labels:
             line_label = None
         else:
             line_label = label
             seen_labels.add(label)
-        ax.plot(subdf_sorted[time_col], subdf_sorted["mean"],
-                linewidth=0.8, alpha=0.3, marker="o", label=line_label)
+
+        ax.plot(
+            subdf_sorted[time_col],
+            subdf_sorted["mean"],
+            label=line_label,
+            **line_kwargs,
+        )
     # 计算整体均值（跨被试）
     mean_overall = agg_df.groupby(time_col)["mean"].mean().reindex(unique_times)
     ax.plot(unique_times, mean_overall,
@@ -247,13 +321,38 @@ def _plot_subject_time_trajectories(df: pd.DataFrame, var: str, subject_col: str
         for subj, subdf in cond_df.groupby(subject_col):
             subdf_sorted = subdf.set_index(time_col).reindex(unique_times).reset_index()
             label = _short_label(subj)
+
+            # 根据被试 ID 应用自定义样式（若存在）
+            style_key = label
+            style_cfg = SID_colormarker.get(style_key)
+            if style_cfg is None:
+                style_cfg = SID_colormarker.get(str(subj))
+
+            line_kwargs = {
+                "linewidth": 0.8,
+                "alpha": 0.3,
+                "marker": "o",
+            }
+            if style_cfg:
+                if "color" in style_cfg:
+                    line_kwargs["color"] = style_cfg["color"]
+                if "alpha" in style_cfg:
+                    line_kwargs["alpha"] = style_cfg["alpha"]
+                if "linewidth" in style_cfg:
+                    line_kwargs["linewidth"] = style_cfg["linewidth"]
+
             if label in seen_labels:
                 line_label = None
             else:
                 line_label = label
                 seen_labels.add(label)
-            ax.plot(subdf_sorted[time_col], subdf_sorted["mean"],
-                    linewidth=0.8, alpha=0.3, marker="o", label=line_label)
+
+            ax.plot(
+                subdf_sorted[time_col],
+                subdf_sorted["mean"],
+                label=line_label,
+                **line_kwargs,
+            )
         mean_cond = cond_df.groupby(time_col)["mean"].mean().reindex(unique_times)
         ax.plot(unique_times, mean_cond,
                 linewidth=2.0, alpha=0.9, marker="o", color="black", label="Condition mean")
@@ -376,28 +475,28 @@ def main():
         # 1. 每个被试的描述统计
         by_subj = _describe_by_subject(df, var, subject_id)
         by_subj = _round_numeric(by_subj, digits=3)
-        out1 = SRC_DIR / f"desc_{var}_by_{subject_id}.csv"
+        out1 = OUT_ROOT / f"desc_{var}_by_{subject_id}.csv"
         by_subj.to_csv(out1, index=False)
         output_files.append((out1, f"{var} 每被试总体描述（均值/标准差/CV）"))
 
         # 2. 每个被试 × 时间窗口 的描述统计
         by_subj_time = _describe_by_subject_time(df, var, subject_id, time)
         by_subj_time = _round_numeric(by_subj_time, digits=3)
-        out2 = SRC_DIR / f"desc_{var}_by_{subject_id}_and_{time}.csv"
+        out2 = OUT_ROOT / f"desc_{var}_by_{subject_id}_and_{time}.csv"
         by_subj_time.to_csv(out2, index=False)
         output_files.append((out2, f"{var} 每被试 × 时间窗口 描述（均值/标准差/CV）"))
 
         # 3. 全局范围内，每个被试对方差的影响
         inf_overall = _subject_variance_influence(df, var, subject_id)
         inf_overall = _round_numeric(inf_overall, digits=3)
-        out3 = SRC_DIR / f"variance_influence_overall_{var}_by_{subject_id}.csv"
+        out3 = OUT_ROOT / f"variance_influence_overall_{var}_by_{subject_id}.csv"
         inf_overall.to_csv(out3, index=False)
         output_files.append((out3, f"{var} 全局方差分解：各被试贡献"))
 
         # 4. 在每个条件组内的方差贡献
         inf_by_cond = _subject_variance_influence_by_condition(df, var, subject_id, condition)
         inf_by_cond = _round_numeric(inf_by_cond, digits=3)
-        out4 = SRC_DIR / f"variance_influence_by_{condition}_{var}_by_{subject_id}.csv"
+        out4 = OUT_ROOT / f"variance_influence_by_{condition}_{var}_by_{subject_id}.csv"
         inf_by_cond.to_csv(out4, index=False)
         output_files.append((out4, f"{var} 分条件方差分解：各被试贡献"))
 
@@ -405,11 +504,11 @@ def main():
         slopes_wide = _subject_interval_slopes_wide(df, var, subject_id, time, condition)
         if not slopes_wide.empty:
             slopes_wide = _round_numeric(slopes_wide, digits=3)
-            out5 = SRC_DIR / f"slope_{var}_by_{subject_id}_intervals.csv"
+            out5 = OUT_ROOT / f"slope_{var}_by_{subject_id}_intervals.csv"
             slopes_wide.to_csv(out5, index=False)
             output_files.append((out5, f"{var} 斜率描述（每被试 × 相邻时间区间，宽表）"))
 
-        traj_figs = _plot_subject_time_trajectories(df, var, subject_id, time, condition, SRC_DIR)
+        traj_figs = _plot_subject_time_trajectories(df, var, subject_id, time, condition, OUT_ROOT)
         output_files.extend(traj_figs)
 
     print("\n[info] 数据描述与方差贡献分析完成。生成的 CSV 文件如下：")

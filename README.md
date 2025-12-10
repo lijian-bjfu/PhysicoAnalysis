@@ -93,11 +93,16 @@ make_windowing_ecg_plot(
 
 `method`设置切窗方法，包括全切与细分2种（cover / subdivide）。全切不考虑切窗历史，细分则考虑上一次切窗历史，对上一次切窗结果中的某一部分进行再次切窗。第一次cover的结果会放在 processed/windowing/local/level1下。对上一次切窗结果的每次“细分”切窗会自动增加一极level。每次切窗会生成一个log文件供使用者追溯各切窗之间的关系，以及一个index文件便于后续对所有的窗口的整合组装。
 
-选择 subdivide 模式会需要在终端进行一些交互处理。要求手动选中“某一层的某一个窗口文件”，代码据此识别是哪个窗口（w03 / w04…），然后在这一层的 index.csv 里找到所有被试的同一个父窗口区间，对所有被试在同一父窗内统一做“二次切窗”。
-
 `use`设置切窗策略，可选策略包括根据事件信息切窗、切单窗、滑窗、事件+单窗、事件+滑窗、单窗+滑窗，(events / single / sliding / events_offset / events_sliding / single_sliding) 共6种。使用 events 切窗需要事件表，在 `events_path`下设置路径。开始时间为相对位置，例如start_s 设置为12，会从数据12秒的位置作为切窗开始位置。
 
 推荐使用 `events_labeled_windows` 方法。该方法根据顺序与事件名来精确定义窗口。用户根据 events 列表中的事件顺序，在settings中逐一写下每窗的起始事件标签。
+
+选择 subdivide 模式会需要在终端进行一些交互处理。要求手动选中“某一层的某一个窗口文件”，代码据此识别是哪个窗口（w03 / w04…），然后在这一层的 index.csv 里找到所有被试的同一个父窗口区间，对所有被试在同一父窗内统一做“二次切窗”。基于subdivide 方式操作要注意以下细节：
+
+- 如果重新操作，请先删除 除了 level1 外其他level的文件见，否则系统会不断生成新的level
+- 每次操作，要上一层level 文件夹（多数情况下为level1 ）中选择一个窗口数据。该数据可为任何数据（如 rr, hr 等），仅注意数据最后 _wN 的后缀。程序期望选择一个特定的窗口数据进行二次分割，比如选择..._w06.csv，程序会对所有数据的w06窗进行进一步细分。 
+- 使用subdivide 后的记录会按照分窗策略记录，这会覆盖 `events_labeled_windows` 方法的关键词，导致后续无法使用`11_make_ELW_table.py`制表，建议使用后改回 cover 模式。
+
 
 ## 整理切窗数据
 
@@ -158,7 +163,13 @@ make_windowing_ecg_plot(
 
 操作方法：`11_make_ELW_table.py`
 
-该脚本针对包含测试中与测试后的复杂切窗模型设计的。专门用于对使用 settings 中 events_labeled_windows 切窗模式生成的数据进行制表。使用此脚本制表需要在 events_labeled_windows 中 设置窗口的命名规范。由于有测试期（phase）和测试间（gap）之分，测试期表示被试在静息、诱导、干预的整个时间段；测试间表示每个测试期结束，以及下一个测试期开始前，用户的回答问卷以及静止的期间。这两个期间在分析时是按照两套时间维度对待的，因此对制表有特殊的要求。在使用此方法制表时需要为每个窗口名（windows["name"]）有个明确的标注。改标注放在"window_category"的列表里。例如 "p" 表示 phase,那么测试期的窗口名要加上 p_的前缀，如 p_baseline；"g_" 表示 gap, 测试间的窗口名则使用类似 "g_t1" 的名字类型。"psycho_time" 键值表示心理指标测量是在哪个时间类别测量的，比如 "psycho_time" = "g" 表示心理指标是在测试间测量的。程序会根据这些规则来识别不同指标依赖哪些时间，并进行制表。该脚本会制作宽表与长表
+该脚本针对包含测试中与测试后的复杂切窗模型设计的。专门用于对使用 settings 中 events_labeled_windows 切窗模式生成的数据进行制表。如报错：
+
+`ValueError: 本脚本仅支持 settings.windowing.use == 'events_labeled_windows'。若使用的是其它切窗模式，请改用 10_make_wide_table.py。`
+
+则先去settings 下把切窗模式改回 events_labeled_windows
+
+使用此脚本制表需要在 events_labeled_windows 中 设置窗口的命名规范。由于有测试期（phase）和测试间（gap）之分，测试期表示被试在静息、诱导、干预的整个时间段；测试间表示每个测试期结束，以及下一个测试期开始前，用户的回答问卷以及静止的期间。这两个期间在分析时是按照两套时间维度对待的，因此对制表有特殊的要求。在使用此方法制表时需要为每个窗口名（windows["name"]）有个明确的标注。改标注放在"window_category"的列表里。例如 "p" 表示 phase,那么测试期的窗口名要加上 p_的前缀，如 p_baseline；"g_" 表示 gap, 测试间的窗口名则使用类似 "g_t1" 的名字类型。"psycho_time" 键值表示心理指标测量是在哪个时间类别测量的，比如 "psycho_time" = "g" 表示心理指标是在测试间测量的。程序会根据这些规则来识别不同指标依赖哪些时间，并进行制表。该脚本会制作宽表与长表
 
 宽表数据保存在 data/final/wide_table.csv；长表数据保存在 data/final/long_table.csv
 
@@ -182,6 +193,8 @@ make_windowing_ecg_plot(
     该被试在当前条件下，该指标在其全部观测点上的平均水平。
 	- sd：
     该被试在当前条件下，该指标在其全部观测点上的标准差，用于反映该被试“在自己身上”的波动程度。
+	- task:
+	被试所在组
 	- mean_diff_from_overall：
     被试均值减去总体均值（该条件下所有被试合并后的平均值）。数值为正表示该被试水平高于总体均值，为负表示低于总体均值，反映该被试相对整体是“偏高”还是“偏低”。
 	- between_ss_contrib：
@@ -202,10 +215,11 @@ make_windowing_ecg_plot(
 - 分条件组内的被试轨迹图
     - traj_rmssd_ms_by_subject_id_and_t_id_cond_click.png
     - 在实验组内部，是不是大部分被试都按“理论方向”变化（例如 T2 上升，T3 下降），比较控制组是不是完全躺平或反向
+	- 可以在代码设置参数 `SID_colormarker` 来高亮某个被试数据的折线图，方便后续的数据检查
 
 - 斜率比较宽表
     - slope_rmssd_ms_by_subject_id_intervals.csv
-    - sl_1_2：该被试在 T1→T2 的变化幅度（如果 t_id 间隔为 1 就等于 T2 − T1）。
+    - sl_1_2：该被试在 T1→T2 的变化幅度。
 	- grp_sl_1_2：同一 task 下，所有被试 T1→T2 斜率的平均值。
 	- d_sl_1_2：该被试与组平均斜率的差值。
         - 正值：比组平均“更往上”；
