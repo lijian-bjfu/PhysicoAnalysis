@@ -207,7 +207,7 @@ DATASETS = {
                 # 三选一：给 [start_s,end_s]；或 [start_s,win_len_s]；
                 # 时间按照相对值设置，例如开始时间设为 12，
                 # 会从数据开始位置向后偏移12秒作为切窗开始
-                "single": {"start_s": 20, "end_s": None, "win_len_s": None},
+                "single": {"start_s": 40, "end_s": None, "win_len_s": None},
 
                 # 3) 滑窗：在 [start_s,end_s] 范围内按 win_len/stride 切窗
                 # 时间按照相对值设置。例如开始时间设为 12, 
@@ -248,7 +248,7 @@ DATASETS = {
                             "name": "g_t1",
                             "start_event": "baseline_start",
                             "end_event": "p0",
-                            "inset": 10
+                            "inset": 30
                         },
                         {
                             "name": "p_induction",
@@ -321,11 +321,11 @@ DATASETS = {
             # "sd1_ms",
             # "sd2_ms",
             # *-- rsa 特征 --*
-            # "rsa_ms",
-            # "rsa_log_ms",
+            "rsa_ms",
+            "rsa_log_ms",
             # "resp_amp",
             # "resp_log_amp",
-            # "resp_rate_bpm",
+            "resp_rate_bpm",
             # "n_breaths_used",
             # "rsa_method",
             # *-- 运动 acc" --*

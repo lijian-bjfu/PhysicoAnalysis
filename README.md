@@ -45,6 +45,8 @@ local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文
 
 该脚本有个重要的参数 ECG_RR_V = 'v2' 有v1 v2 两个选项，v1是用 NeuroKit2 做的，但数据会失真。v2 算法保守，但会有很多地方识别错误，需要在 clean_rr 中进行专门的清理。
 
+该脚本设置 SID 参数。该参数与settings preview_sids 意义重叠，但在本脚本中也可以直接设置 SID 。rr 的预览只会展示 SID 列出的被试。在最后一个阶段确认选择时也会根据 SID 列表执行，此阶段如果 SID 为空则全部执行。
+
 ## 清理 RR 
 
 操作方法：`4a_clean_rr.py`
@@ -62,6 +64,8 @@ local 数据为 LSL 流记录的数据，需要提前转换为 .csv 文件，文
 标注对哪些被试的 RR 数据进行处理。n_segments 表示在该被试 RR 中识别到的“短时尖峰短段”的数量。n_corrected 表示需处理的搏点个数之和。ratio_corrected 表示n_corrected / 全部 RR 点数 的比例。warning 当数据糟糕到一定程度会提醒，例如异常短段数达到提醒阈值（默认 4）或需修正搏点占比达到提醒阈值（默认 0.05）
 
 处理后的 RR 会覆盖之前的confirmed rr。
+
+该脚本设置 SID 参数。程序只清理 SID 显示的被试。如果SID为空，则对全部被试处理。
 
 ## 绘图查看
 
@@ -110,9 +114,15 @@ make_windowing_ecg_plot(
 
 将所有的切窗整理为后续可用的数据。数据保存在windowing/collected/下。数据按照信号类型放在不同的文件夹。同时还生成一个collected_index.csv，供后续整理心率指标的长表使用。
 
+## 清理呼吸数据
+
+操作方法：`5c_clean_resp.py`
+
+评估窗口resp的数据质量，并清除无效的呼吸数据。该脚本执行后会覆盖 collected / resp 下的原始数据。
+
 ## 切窗数据绘图
 
-操作方法：`5c_window_plot.py`
+操作方法：`5d_window_plot.py`
 
 读取 windowing/collected 文件夹的切窗数据，为制定窗口和制定被试绘图。
 - SID = ["..."] 输入想要查看的被试ID

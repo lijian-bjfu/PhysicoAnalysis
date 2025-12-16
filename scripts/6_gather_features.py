@@ -37,11 +37,12 @@ except ImportError:
     from features import hrv_time as f_time
     from features import hrv_freq as f_freq
     from features import hrv_rsa  as f_rsa
+    from features import hrv_acc  as f_acc
 
 print(f"[INFO] hrv_time module: {getattr(f_time, '__file__', 'unknown')}")
 print(f"[INFO] hrv_freq module: {getattr(f_freq, '__file__', 'unknown')}")
 print(f"[INFO] hrv_rsa module: {getattr(f_rsa, '__file__', 'unknown')}")
-print(f"[INFO] hrv_acc module: {getattr(f_acc, '__file__', 'unknown')}")
+print(f"[INFO] hrv_acc module: {getattr(f_acc, '__file__', 'unavailable')}")
 
 # Regex for <sid>_<sig>_wNN.csv
 FILE_RE = re.compile(r"^(?P<sid>[^_]+)_(?P<sig>[^_]+)_w(?P<wid>\d+)\.csv$")
@@ -311,11 +312,11 @@ def main():
             resp_df = None
             n_rsa_skipped_no_resp += 1
 
-        acc_df = _load_segment(sid, 'acc', wid)
-        if acc_df is None or acc_df.empty:
-            print(f"[WARN] 缺少 acc 段：{sid}_acc_w{wid}")
-            n_missing_acc += 1
-            continue
+        # acc_df = _load_segment(sid, 'acc', wid)
+        # if acc_df is None or acc_df.empty:
+        #     print(f"[WARN] 缺少 acc 段：{sid}_acc_w{wid}")
+        #     n_missing_acc += 1
+        #     # continue
 
         # per-window metadata from collected_index (meaning, w_s, w_e)
         meta = idx[(idx["subject_id"] == sid) & (idx["w_id"] == wid)]
@@ -357,13 +358,24 @@ def main():
                 n_read_errors += 1
 
         if "acc" in rr_plan:
-            try:
-                # 优先使用显式 acc_df（保持与其它特征模块一致的接口）
-                feat_parts.append(f_acc.features_segment(acc_df=acc_df))
-                n_acc += 1
-            except Exception as e:
-                print(f"[WARN] ACC 特征失败 {sid}/w{wid}: {e}")
-                n_read_errors += 1
+            acc_df = _load_segment(sid, 'acc', wid)
+            if acc_df is None or acc_df.empty:
+                # NaN 直接占位
+                feat_parts.append(pd.DataFrame([[pd.NA, pd.NA]],
+                                            columns=["acc_enmo_mean", "acc_motion_frac"]))
+                print(f"[WARN] 缺少 acc 段：{sid}_acc_w{wid}")
+                n_missing_acc += 1 
+            else:
+                try:
+                    # 优先使用显式 acc_df（保持与其它特征模块一致的接口）
+                    feat_parts.append(f_acc.features_segment(acc_df=acc_df))
+                    n_acc += 1
+                except Exception as e:
+                    print(f"[WARN] ACC 特征失败 {sid}/w{wid}: {e}")
+                    n_read_errors += 1
+                    # 失败也占位，避免下游列缺失
+                    feat_parts.append(pd.DataFrame([[pd.NA, pd.NA]],
+                                                columns=["acc_enmo_mean", "acc_motion_frac"]))
 
         feat_df = pd.concat(feat_parts, axis=1) if feat_parts else pd.DataFrame()
         # per-window RR QC (minimal): rr_valid_ratio, rr_max_gap_s
@@ -390,9 +402,21 @@ def main():
 
     out_df = pd.DataFrame(rows)
 
-    #---- 对acc 与 resp 去中心化，这两个指标主要用于协变量
-    targets = [c for c in ["acc_enmo_mean","acc_motion_frac","resp_rate_bpm","resp_amp","resp_log_amp"] if c in out_df.columns]
-    out_df = add_within_between_centering(out_df, id_col="subject_id", cols=targets, add_between=True)
+    # ---- 对 ACC 与 RESP 做被试内去中心化（用于协变量） ------------------------
+    # 说明：
+    #   *_ws  = within-subject centered = X_ij - mean_i(X)  （同一受试者跨所有窗口的均值）
+    #   *_bs  = between-subject mean    = mean_i(X)         （受试者均值，默认不导出，避免误解/冗余）
+    # 注意：这里的去中心化是“按受试者”进行，并不是“同一时间窗口”或“同一 timepoint”去中心化。
+    targets = [c for c in [
+        "acc_enmo_mean",
+        "acc_motion_frac",
+        "resp_rate_bpm",
+        "resp_amp",
+        "resp_log_amp",
+    ] if c in out_df.columns]
+
+    # 默认仅导出 *_ws，避免 *_bs 在缺失较多时产生“看起来有值但该窗其实无呼吸/无ACC”的误解。
+    out_df = add_within_between_centering(out_df, id_col="subject_id", cols=targets, add_between=False)
 
     out_path = OUT_ROOT / "physico_features.csv"
     out_df.to_csv(out_path, index=False)
@@ -401,15 +425,25 @@ def main():
     elapsed = time.time() - start_time
     print(f"[SUMMARY] 处理完成，耗时 {elapsed:.1f} 秒")
     print(f"  总窗口数: {len(combos)}")
-    print(f"  成功计算窗口数: {n_rows}")
+    print(f"  写出窗口数(写入特征表的行数): {n_rows}")
+    print("  说明：写出窗口数 ≠ 统计可用窗口数。统计可用性需在下游根据缺失/质量规则进行筛选。")
     print(f"  缺少 RR 窗口数: {n_missing_rr}")
     print(f"  无切窗索引信息跳过数: {n_skipped_no_index}")
     print(f"  时域特征成功数: {n_time}")
     print(f"  频域特征成功数: {n_freq}")
-    print(f"  RSA 特征成功数: {n_rsa}")
-    print(f"  RSA 跳过(无呼吸段)数: {n_rsa_skipped_no_resp}")
+    if "rsa" in rr_plan:
+        print(f"  RSA 字段写入窗口数: {n_rsa}  (其中无呼吸段占位: {n_rsa_skipped_no_resp})")
+    else:
+        print("  RSA: 未请求/未计算")
     print(f"  读取/计算错误数: {n_read_errors}")
-    print(f"  ACC 特征成功数: {n_acc}")
+    if "acc" in rr_plan:
+        print(f"  ACC 段可用窗口数: {n_acc}  (缺失/不可读: {n_missing_acc})")
+        if n_acc == 0:
+            print("  说明：ACC 段可用窗口数为 0 表示当前数据集中未找到可读取的 acc 窗口文件，并非程序错误。")
+    else:
+        print("  ACC: 未请求/未计算")
+    if targets:
+        print("  说明：输出表中仅导出 *_ws（被试内去中心化）列；默认不导出 *_bs（受试者均值）列。")
 
 
 if __name__ == "__main__":

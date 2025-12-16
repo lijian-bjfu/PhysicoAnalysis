@@ -22,6 +22,7 @@ RSA（窦性呼吸性心律不齐）特征（单段 RR）
 - 仅对“单段 RR + 可选呼吸”计算 RSA，不做切窗/清洗/批处理。
 - 公共接口与其它特征模块一致：features_segment(rr_df, resp_df=None) -> DataFrame[1xK]
 - 以“峰-谷（peak-to-valley）”为主方法；若无呼吸，则返回 NaN。
+- 支持含 NaN 的断续呼吸：按 NaN 切分，逐段计算后汇总（RSA 均值、rate 中位数）。
 - 所有口径与阈值从 settings.PARAMS 读取（单一真相源）。
 
 输出字段（最小且可用于论文的方法段）：
@@ -89,6 +90,48 @@ def _compute_resp_amp(t_resp: np.ndarray, x_resp: np.ndarray, peaks_idx: np.ndar
 
 # ---------- 公共 API ----------
 
+def _split_valid_spans(
+    t: np.ndarray,
+    x: np.ndarray,
+    *,
+    split_on_time_gap: bool = False,
+    max_gap_s: float = np.inf,
+) -> list[tuple[int, int]]:
+    """Split into contiguous spans where x is finite.
+
+    Default behavior (split_on_time_gap=False):
+    - ONLY uses NaN/inf in x (or t) as span breaks.
+
+    Optional safeguard (split_on_time_gap=True):
+    - ALSO breaks spans when the gap between consecutive timestamps is larger than max_gap_s.
+
+    Returns a list of (start_idx, end_idx) inclusive.
+    """
+    if t.size == 0:
+        return []
+
+    finite = np.isfinite(t) & np.isfinite(x)
+    spans: list[tuple[int, int]] = []
+    n = t.size
+    i = 0
+
+    while i < n:
+        if not finite[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n:
+            if not finite[j + 1]:
+                break
+            if split_on_time_gap and (t[j + 1] - t[j]) > max_gap_s:
+                break
+            j += 1
+        spans.append((i, j))
+        i = j + 1
+
+    return spans
+
+
 def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """
     计算单段 RR 的 RSA（peak-to-valley）。
@@ -109,8 +152,15 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
     min_rr_per_breath = int(PARAMS.get('rsa_min_rr_per_breath', 2))       # 每个呼吸周期内的最少 RR 个数
     rsa_agg = str(PARAMS.get('rsa_agg', 'mean'))                           # 'mean' 或 'median'
 
-    # 基本容错
-    if resp_df is None or resp_df.empty or ('t_s' not in resp_df or 'resp' not in resp_df):
+    # 基本容错：呼吸列允许 'resp' 或 'value'
+    resp_col = None
+    if resp_df is not None and not resp_df.empty:
+        if 'resp' in resp_df:
+            resp_col = 'resp'
+        elif 'value' in resp_df:
+            resp_col = 'value'
+
+    if resp_df is None or resp_df.empty or ('t_s' not in resp_df) or (resp_col is None):
         return pd.DataFrame([{
             'rsa_ms': np.nan,
             'rsa_log_ms': np.nan,
@@ -139,7 +189,7 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
 
     # —— 呼吸峰检测 ——
     t_resp = resp_df['t_s'].to_numpy(dtype=float)
-    x_resp = resp_df['resp'].to_numpy(dtype=float)
+    x_resp = resp_df[resp_col].to_numpy(dtype=float)
     if t_resp.size < 3:
         return pd.DataFrame([{
             'rsa_ms': np.nan,
@@ -164,76 +214,33 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
             'rsa_method': 'unavailable'
         }])
 
-    # 基于生理范围设置最小/最大峰距（样本点）
-    min_dist_sec = 60.0 / resp_max_bpm  # 最短周期（高频呼吸）
-    max_dist_sec = 60.0 / resp_min_bpm  # 最长周期（低频呼吸）
-    distance_pts = max(1, int(np.floor(min_dist_sec / dt * 0.8)))
+    # —— 处理清理后的“断续/NaN”呼吸：按 NaN 切分为多个连续片段，逐段计算后汇总 ——
+    # 设计选择：默认只看 NaN（clean_resp 对不连续/无效段负责插 NaN）。
+    split_on_time_gap = bool(PARAMS.get('rsa_split_on_time_gap', False))
+    gap_factor = float(PARAMS.get('resp_gap_factor', 3.0))
+    max_gap_s = float(PARAMS.get('resp_max_gap_s', gap_factor * dt))
 
-    # —— 轻度预处理（可选）：仅用于稳健找峰，不改变RSA定义 ——
-    x_filt = x_resp.copy()
-    smooth_sec = float(PARAMS.get('rsa_resp_smooth_sec', 0.0))
-    if smooth_sec > 0:
-        win = max(1, int(round(smooth_sec / dt)))
-        # 使用奇数窗保证峰位不系统性偏移
-        if win % 2 == 0:
-            win += 1
-        if win > 1:
-            ker = np.ones(win, dtype=float) / float(win)
-            x_filt = np.convolve(x_filt, ker, mode='same')
+    spans = _split_valid_spans(
+        t_resp,
+        x_resp,
+        split_on_time_gap=split_on_time_gap,
+        max_gap_s=max_gap_s,
+    )
 
-    # 动态显著性：若未指定（=0），用 IQR 的一小部分抑制毛刺
-    if resp_peak_prominence and resp_peak_prominence > 0:
-        prom = resp_peak_prominence
-    else:
-        q75, q25 = np.percentile(x_filt, [75, 25])
-        iqr = float(q75 - q25)
-        prom = 0.1 * iqr if np.isfinite(iqr) and iqr > 0 else 0.0
-
-    # 同时尝试向上峰与向下峰，自动选择有效周期更多的一侧
-    peaks_pos, _ = find_peaks(x_filt, distance=distance_pts, prominence=prom)
-    peaks_neg, _ = find_peaks(-x_filt, distance=distance_pts, prominence=prom)
-
-    def _valid_with_tail(peaks_idx: np.ndarray) -> np.ndarray:
-        if peaks_idx.size < 2:
-            return np.array([], dtype=int)
-        v = []
-        for i in range(peaks_idx.size - 1):
-            p0, p1 = peaks_idx[i], peaks_idx[i+1]
-            period = t_resp[p1] - t_resp[p0]
-            if period <= 0:
-                continue
-            bpm = 60.0 / period
-            if resp_min_bpm <= bpm <= resp_max_bpm:
-                v.append(peaks_idx[i])
-        if len(v) >= 1:
-            tail_candidates = peaks_idx[peaks_idx > v[-1]]
-            if tail_candidates.size >= 1:
-                v = np.array(v + [tail_candidates[0]], dtype=int)
-            else:
-                v = np.array(v, dtype=int)
-        else:
-            v = np.array([], dtype=int)
-        return v
-
-    vpos = _valid_with_tail(peaks_pos)
-    vneg = _valid_with_tail(peaks_neg)
-    # 以可用周期数（size-1）为准择优；平手时优先正峰
-    cycles_pos = max(0, vpos.size - 1)
-    cycles_neg = max(0, vneg.size - 1)
-    valid_peaks = vpos if cycles_pos >= cycles_neg else vneg
-
-    # 若仍不足以形成周期，则尽早返回（报告基于较多的一侧估计的呼吸率）
-    if valid_peaks.size < 2:
-        base_peaks = peaks_pos if peaks_pos.size >= peaks_neg.size else peaks_neg
+    if not spans:
         return pd.DataFrame([{
             'rsa_ms': np.nan,
             'rsa_log_ms': np.nan,
             'resp_amp': np.nan,
             'resp_log_amp': np.nan,
-            'resp_rate_bpm': _estimate_resp_rate_from_peaks(t_resp, base_peaks) if base_peaks.size >= 2 else np.nan,
+            'resp_rate_bpm': np.nan,
             'n_breaths_used': 0,
             'rsa_method': 'unavailable'
         }])
+
+    # 统一的“最低可算”门槛：至少需要 2 个呼吸周期
+    rsa_min_breaths = int(PARAMS.get('rsa_min_breaths', 2))
+    min_iqr = float(PARAMS.get('rsa_min_resp_iqr', 1e-6))
 
     # —— RR → 心搏时间 ——
     rr = rr_df['rr_ms'].to_numpy(dtype=float)
@@ -244,49 +251,179 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
             'rsa_log_ms': np.nan,
             'resp_amp': np.nan,
             'resp_log_amp': np.nan,
-            'resp_rate_bpm': _estimate_resp_rate_from_peaks(t_resp, valid_peaks) if valid_peaks.size >= 2 else np.nan,
+            'resp_rate_bpm': np.nan,
             'n_breaths_used': 0,
             'rsa_method': 'unavailable'
         }])
-    t_beats = _rr_to_beat_times(rr)
 
-    # —— 在每个呼吸周期内计算 (max RR - min RR) ——
-    rsa_values = []
-    breath_count = 0
-    for i in range(valid_peaks.size - 1):
-        t0 = t_resp[valid_peaks[i]]
-        t1 = t_resp[valid_peaks[i+1]]
-        sel = (t_beats >= t0) & (t_beats < t1)
-        rr_in = rr[sel]
-        if rr_in.size >= min_rr_per_breath:
-            rsa_values.append(float(np.max(rr_in) - np.min(rr_in)))
-            breath_count += 1
+    # 优先使用 rr_df['t_s']（若可用），以更稳健地与 resp 的时间轴对齐；否则回退到累加 RR。
+    if 't_s' in rr_df and np.isfinite(rr_df['t_s'].to_numpy(dtype=float)).any():
+        t_beats = rr_df['t_s'].to_numpy(dtype=float)
+        # 与 resp 的 rebase(从窗口起点)对齐：把首个心搏时间归零
+        t0b = float(t_beats[0]) if np.isfinite(t_beats[0]) else float(np.nanmin(t_beats))
+        if np.isfinite(t0b):
+            t_beats = t_beats - t0b
+        # 只保留与 rr 同步的有限时间戳
+        good = np.isfinite(t_beats)
+        t_beats = t_beats[good]
+        rr = rr[good]
+    else:
+        t_beats = _rr_to_beat_times(rr)
 
-    if breath_count == 0:
+    # 收集每个 span 的结果，用于窗口级汇总
+    span_rsa_values: list[float] = []
+    span_rate_values: list[float] = []
+    span_amp_values: list[float] = []
+    breaths_used_total = 0
+
+    # —— 逐 span 找峰并计算 RSA（每段单独计算，最后汇总）——
+    for (i0, i1) in spans:
+        # 片段长度检查
+        if i1 <= i0 or (i1 - i0 + 1) < 5:
+            continue
+
+        t_span = t_resp[i0:i1 + 1].astype(float)
+        x_span = x_resp[i0:i1 + 1].astype(float)
+
+        # 低振幅/锁死保护：IQR 过小基本不可能可靠找峰
+        q75_s, q25_s = np.nanpercentile(x_span, [75, 25])
+        iqr_s = float(q75_s - q25_s)
+        if (not np.isfinite(iqr_s)) or (iqr_s <= min_iqr):
+            continue
+
+        # —— 轻度预处理（可选）：仅用于稳健找峰，不改变 RSA 定义 ——
+        x_filt = x_span.copy()
+        smooth_sec = float(PARAMS.get('rsa_resp_smooth_sec', 0.0))
+        if smooth_sec > 0:
+            win = max(1, int(round(smooth_sec / dt)))
+            if win % 2 == 0:
+                win += 1
+            if win > 1:
+                ker = np.ones(win, dtype=float) / float(win)
+                x_filt = np.convolve(x_filt, ker, mode='same')
+
+        # 动态显著性：若未指定（=0），用 IQR 的一小部分抑制毛刺
+        if resp_peak_prominence and resp_peak_prominence > 0:
+            prom = resp_peak_prominence
+        else:
+            prom = 0.1 * iqr_s if np.isfinite(iqr_s) and iqr_s > 0 else 0.0
+
+        # 基于生理范围设置最小峰距（样本点）
+        min_dist_sec = 60.0 / resp_max_bpm
+        distance_pts = max(1, int(np.floor(min_dist_sec / dt * 0.8)))
+
+        peaks_pos, _ = find_peaks(x_filt, distance=distance_pts, prominence=prom)
+        peaks_neg, _ = find_peaks(-x_filt, distance=distance_pts, prominence=prom)
+
+        def _valid_with_tail_span(peaks_idx: np.ndarray) -> np.ndarray:
+            """Select a physiologically-valid contiguous peak sequence.
+
+            Keep the longest contiguous subsequence whose consecutive peak-to-peak BPM
+            stays within [resp_min_bpm, resp_max_bpm]. This avoids the previous
+            “every-other-peak” behavior that can double the median period and halve
+            resp_rate_bpm.
+            """
+            if peaks_idx.size < 2:
+                return np.array([], dtype=int)
+
+            t_peaks = t_span[peaks_idx]
+            periods = np.diff(t_peaks)
+
+            good = np.isfinite(periods) & (periods > 0)
+            bpm = np.full(periods.shape, np.nan, dtype=float)
+            bpm[good] = 60.0 / periods[good]
+            valid_edge = good & (bpm >= resp_min_bpm) & (bpm <= resp_max_bpm)
+
+            if not np.any(valid_edge):
+                return np.array([], dtype=int)
+
+            # Find the longest run of True in valid_edge.
+            # valid_edge[i] refers to edge between peaks_idx[i] and peaks_idx[i+1].
+            best_start = 0
+            best_end = -1
+            cur_start = None
+
+            for i, ok in enumerate(valid_edge):
+                if ok:
+                    if cur_start is None:
+                        cur_start = i
+                else:
+                    if cur_start is not None:
+                        cur_end = i - 1
+                        if (best_end - best_start) < (cur_end - cur_start):
+                            best_start, best_end = cur_start, cur_end
+                        cur_start = None
+
+            if cur_start is not None:
+                cur_end = len(valid_edge) - 1
+                if (best_end - best_start) < (cur_end - cur_start):
+                    best_start, best_end = cur_start, cur_end
+
+            # Convert edge-run [best_start..best_end] to peak-run [best_start..best_end+1]
+            return peaks_idx[best_start:best_end + 2].astype(int)
+
+        vpos = _valid_with_tail_span(peaks_pos)
+        vneg = _valid_with_tail_span(peaks_neg)
+        cycles_pos = max(0, vpos.size - 1)
+        cycles_neg = max(0, vneg.size - 1)
+        valid_peaks = vpos if cycles_pos >= cycles_neg else vneg
+
+        if valid_peaks.size < 2:
+            continue
+
+        # —— 在每个呼吸周期内计算 (max RR - min RR) ——
+        rsa_values = []
+        breath_count = 0
+        for k in range(valid_peaks.size - 1):
+            t0 = t_span[valid_peaks[k]]
+            t1 = t_span[valid_peaks[k + 1]]
+            sel = (t_beats >= t0) & (t_beats < t1)
+            rr_in = rr[sel]
+            if rr_in.size >= min_rr_per_breath:
+                rsa_values.append(float(np.max(rr_in) - np.min(rr_in)))
+                breath_count += 1
+
+        if breath_count < rsa_min_breaths:
+            continue
+
+        rsa_values = np.array(rsa_values, dtype=float)
+        if rsa_agg == 'median':
+            rsa_span = float(np.median(rsa_values))
+        else:
+            rsa_span = float(np.mean(rsa_values))
+
+        rate_span = _estimate_resp_rate_from_peaks(t_span, valid_peaks)
+        amp_span = _compute_resp_amp(t_span, x_span, valid_peaks, agg=rsa_agg)
+
+        if np.isfinite(rsa_span):
+            span_rsa_values.append(rsa_span)
+        if np.isfinite(rate_span):
+            span_rate_values.append(rate_span)
+        if np.isfinite(amp_span):
+            span_amp_values.append(amp_span)
+
+        breaths_used_total += int(breath_count)
+
+    # —— 汇总（窗口级）：RSA 取均值，呼吸率取中位数 ——
+    if len(span_rsa_values) == 0:
+        # 没有任何可用片段
         return pd.DataFrame([{
             'rsa_ms': np.nan,
             'rsa_log_ms': np.nan,
             'resp_amp': np.nan,
             'resp_log_amp': np.nan,
-            'resp_rate_bpm': _estimate_resp_rate_from_peaks(t_resp, valid_peaks) if valid_peaks.size >= 2 else np.nan,
-            'n_breaths_used': 0,
+            'resp_rate_bpm': float(np.nanmedian(span_rate_values)) if len(span_rate_values) else np.nan,
+            'n_breaths_used': int(breaths_used_total),
             'rsa_method': 'unavailable'
         }])
 
-    rsa_values = np.array(rsa_values, dtype=float)
-    if rsa_agg == 'median':
-        rsa_ms = float(np.median(rsa_values))
-    else:
-        rsa_ms = float(np.mean(rsa_values))
+    rsa_ms = float(np.nanmean(np.array(span_rsa_values, dtype=float)))
+    rsa_log_ms = np.log(rsa_ms) if (np.isfinite(rsa_ms) and rsa_ms > 0) else np.nan
 
-    rsa_log_ms = np.log(rsa_ms) if (rsa_ms is not None and np.isfinite(rsa_ms) and rsa_ms > 0) else np.nan
+    resp_rate_bpm = float(np.nanmedian(np.array(span_rate_values, dtype=float))) if len(span_rate_values) else np.nan
 
-    # 呼吸振幅：相邻两个呼吸峰之间的 peak-to-trough 振幅的聚合
-    resp_amp = _compute_resp_amp(t_resp, x_resp, valid_peaks, agg=rsa_agg)
-    # 对数振幅：自然对数，非正值与缺失返回 NaN
-    resp_log_amp = np.log(resp_amp) if (resp_amp is not None and np.isfinite(resp_amp) and resp_amp > 0) else np.nan
-
-    resp_rate_bpm = _estimate_resp_rate_from_peaks(t_resp, valid_peaks)
+    resp_amp = float(np.nanmean(np.array(span_amp_values, dtype=float))) if len(span_amp_values) else np.nan
+    resp_log_amp = np.log(resp_amp) if (np.isfinite(resp_amp) and resp_amp > 0) else np.nan
 
     return pd.DataFrame([{
         'rsa_ms': rsa_ms,
@@ -294,7 +431,7 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
         'resp_amp': resp_amp,
         'resp_log_amp': resp_log_amp,
         'resp_rate_bpm': resp_rate_bpm,
-        'n_breaths_used': int(breath_count),
+        'n_breaths_used': int(breaths_used_total),
         'rsa_method': 'peak_to_valley'
     }])
 

@@ -33,7 +33,13 @@ DEC_FILE = PREVIEW_DIR / "decision.csv"
 
 # 仅对列表中被试的结果绘图，用于快速检验。列表为空时，输出所有被试数据
 # 可以在settings中设置, 如果嫌麻烦，在这里设置亦可
+# 最后第二阶段也会查看 PRE_SID 列表。只对列表中包含的这些被试生成最终的RR
+# 如果该列表为空也会生成 RR 
 PRE_SID = [
+    "P001S001T001R001",
+    "P002S001T002R001",
+    "P003S001T001R001",
+    "P004S001T002R001",
     # "P006S001T002R001",
     # "P007S001T001R001",
     # "P008S001T002R001",
@@ -60,13 +66,13 @@ PRE_SID = [
     # "P029S001T002R001",
     # "P030S001T002R001",
     # "P031S001T002R001",
-    "P032S001T001R001",
-    "P033S001T001R001",
-    "P034S001T001R001",
-    "P035S001T002R001",
-    "P036S001T002R001",
-    "P037S001T002R001",
-    "P038S001T001R001",
+    # "P032S001T001R001",
+    # "P033S001T001R001",
+    # "P034S001T001R001",
+    # "P035S001T002R001",
+    # "P036S001T002R001",
+    # "P037S001T002R001",
+    # "P038S001T001R001",
     ]
 
 # —— comb_rr 默认阈值（可按需调）——
@@ -782,14 +788,34 @@ def main():
         print(cheat)
         return
 
-    # 第二阶段：读取决策，产“最终 RR”
+    # 第二阶段，读取决策，生成最终 RR（只为“目标被试”）：
+    # - 若 PRE_SID 为空：对 decision.csv 中的全部 subject_id 生成；
+    # - 若 PRE_SID 非空：仅对 PRE_SID 列表中的被试生成（即使 decision.csv 里有更多被试）。
     dec = pd.read_csv(DEC_FILE)
 
-    out_rows=[]
+    target_sids = None
+    if isinstance(PRE_SID, (list, tuple)) and len(PRE_SID) > 0:
+        target_sids = set([str(x).strip() for x in PRE_SID if str(x).strip()])
+        print(f"[final] 仅生成 PRE_SID 中被试的最终RR：{sorted(target_sids)}")
+    else:
+        print("[final] PRE_SID 为空：将对 decision.csv 中全部被试生成最终RR。")
+
+    out_rows = []
+    done_sids = set()
+
     for _, r in dec.iterrows():
-        sid = str(r["subject_id"])
-        choice = str(r["choice_suggested"]).strip().lower()
-        rr = _read_device_rr(sid) if choice=="device_rr" else None
+        sid = str(r.get("subject_id", "")).strip()
+        if not sid:
+            print("[warn] decision.csv 存在空的 subject_id 行，已跳过")
+            continue
+
+        # 若指定了目标集合，则只处理 PRE_SID 列表内的被试
+        if target_sids is not None and sid not in target_sids:
+            continue
+
+        choice = str(r.get("choice_suggested", "")).strip().lower()
+
+        rr = _read_device_rr(sid) if choice == "device_rr" else None
         if rr is None:
             ecg = _read_ecg(sid)
             if ECG_RR_V == 'v1':
@@ -798,13 +824,21 @@ def main():
                 rr = _ecg_to_rr_v2(ecg) if ecg is not None else None
 
         if rr is None:
-            print(f"[warn] {sid} 无法生成最终 RR"); continue
+            print(f"[warn] {sid} 无法生成最终 RR")
+            continue
 
         RR_OUT_DIR.mkdir(parents=True, exist_ok=True)
         out = RR_OUT_DIR / f"{sid}_rr.csv"
         rr.to_csv(out, index=False)
         print(f"[rr file] {sid} → {out.name} (rows={len(rr)})")
-        out_rows.append({"subject_id":sid, "rows":len(rr), "source":choice})
+        out_rows.append({"subject_id": sid, "rows": len(rr), "source": choice})
+        done_sids.add(sid)
+
+    # 若 PRE_SID 非空，提示有哪些被试在 decision.csv 中未覆盖
+    if target_sids is not None:
+        missing = sorted(list(target_sids - done_sids))
+        if len(missing) > 0:
+            print(f"[warn] PRE_SID 中以下被试未在 decision.csv 中生成（可能缺少行或被跳过）：{missing}")
     if out_rows:
         pd.DataFrame(out_rows).to_csv(PREVIEW_DIR/"final_rr_summary.csv", index=False)
         print(f"[save] 最终 RR 保存 → { RR_OUT_DIR }")

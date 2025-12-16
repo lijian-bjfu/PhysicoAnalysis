@@ -48,12 +48,12 @@ time = "t_id"
 # "P012": {"color": "blue", "alpha": 0.8, "linewidth": 2.0}
 SID_colormarker = {
     # cond 1
-    "P021": {
-        "color": "red",
-        "alpha": 0.9,
-        "linewidth": 2.0,
-    },
-    "P012": {
+    # "P021": {
+    #     "color": "red",
+    #     "alpha": 0.9,
+    #     "linewidth": 2.0,
+    # },
+    "P003": {
         "color": "green",
         "alpha": 0.9,
         "linewidth": 2.0,
@@ -63,7 +63,7 @@ SID_colormarker = {
         "alpha": 0.9,
         "linewidth": 2.0,
     },
-    "P033": {
+    "P001": {
         "color": "brown",
         "alpha": 0.9,
         "linewidth": 2.0,
@@ -74,12 +74,12 @@ SID_colormarker = {
         "linewidth": 2.0,
     },
     # cond 2
-    "P030": {
-        "color": "red",
+    "P008": {
+        "color": "orange",
         "alpha": 0.9,
         "linewidth": 2.0,
     },
-    "P026": {
+    "P024": {
         "color": "pink",
         "alpha": 0.9,
         "linewidth": 2.0,

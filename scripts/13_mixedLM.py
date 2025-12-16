@@ -45,7 +45,7 @@ condition = "task"
 # 时间变量默认名 t_id, 可切换为 phase_level_code
 time = "t_id"
 # 排除的样本（按 subject_id 前缀过滤，例如以 P001 / P002 开头的被试）
-exclude_SID = ["P001", "P002"]
+exclude_SID = ["P012",]
 # 固定因子,程序自动识别交叉
 fixed_effects = [condition, time]
 # 统计模型相关的全局参数

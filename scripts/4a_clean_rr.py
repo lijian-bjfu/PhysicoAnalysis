@@ -37,6 +37,48 @@ SRC_ECG_DIR = (DATA_DIR / paths["norm"]).resolve()       # 原始/规范化 ECG 
 OUT_ROOT = SRC_RR_DIR                                      # 覆盖式输出 → 与确认目录一致
 SELECT_RR_REF_DIR = (DATA_DIR / paths["rr_select"]).resolve()  # 包含 decision.csv 的目录
 
+# 最后结果根据SID 列表清理RR
+# 如果该列表为空也会清理所有 RR 
+SID = [
+    "P001S001T001R001",
+    "P002S001T002R001",
+    "P003S001T001R001",
+    "P004S001T002R001",
+    # "P006S001T002R001",
+    # "P007S001T001R001",
+    # "P008S001T002R001",
+    # "P009S001T001R001",
+    # "P010S001T002R001",
+    # "P011S001T001R001",
+    # "P012S001T001R001",
+    # "P013S001T002R001",
+    # "P014S001T001R001",
+    # "P015S001T002R001",
+    # "P016S001T001R001",
+    # "P017S001T001R001",
+    # "P018S001T001R001",
+    # "P019S001T001R001",
+    # "P020S001T001R001",
+    # "P021S001T001R001",
+    # "P022S001T001R001",
+    # "P023S001T001R001",
+    # "P024S001T002R001",
+    # "P025S001T002R001",
+    # "P026S001T002R001",
+    # "P027S001T002R001",
+    # "P028S001T002R001",
+    # "P029S001T002R001",
+    # "P030S001T002R001",
+    # "P031S001T002R001",
+    # "P032S001T001R001",
+    # "P033S001T001R001",
+    # "P034S001T001R001",
+    # "P035S001T002R001",
+    # "P036S001T002R001",
+    # "P037S001T002R001",
+    # "P038S001T001R001",
+    ]
+
 # ----- 坏点修复策略 -----
 # 对于“坏点”有三种修复策略，默认方法是“插值”（interp）处理方法，该方法删除异常点，并以插值的方法对删除的局部窗口进行平滑处理。
 # 第二种方法是“切分”（split）方法。该方法针对“漏检”的情况，比如少检测一个R波，导致两个期间连在一起，这经常体现在一些突然很高的异常值上，例如从 600 突然跳到 1200。
@@ -992,14 +1034,41 @@ def main():
         return
 
     summary_records: List[Dict] = []
+    # 只有 SID 列表中包含的被试才会被清理；如果 SID 为空则全部清理。
+    target_sids = None
+    if isinstance(SID, (list, tuple)) and len(SID) > 0:
+        target_sids = set([str(x).strip() for x in SID if str(x).strip()])
+        print(f"[clean_rr] SID 非空：仅清理以下被试：{sorted(target_sids)}")
+    else:
+        print("[clean_rr] SID 为空：将清理 decision.csv 中全部待处理被试。")
+
+    done_sids = set()
+
     for sid, choice in tasks[["subject_id", "choice"]].astype(str).itertuples(index=False):
+        sid = (sid or "").strip()
+        if not sid:
+            print("[warn] decision.csv 存在空的 subject_id 行，已跳过")
+            continue
+
+        # 若指定了目标集合，则只处理 SID 列表内的被试
+        if target_sids is not None and sid not in target_sids:
+            continue
+
         ch = (choice or "").strip().lower()
         if ch == "device_rr":
             clean_device_rr(sid, summary_records)
+            done_sids.add(sid)
         elif ch == "ecg_rr":
             clean_ecgv2_rr(sid, summary_records)
+            done_sids.add(sid)
         else:
             print(f"[skip] {sid}: 不应该出现的 choice={choice}, 跳过")
+
+    # 若 SID 非空，提示有哪些被试未被处理（可能 decision.csv 没有对应行或 choice 不匹配）
+    if target_sids is not None:
+        missing = sorted(list(target_sids - done_sids))
+        if len(missing) > 0:
+            print(f"[warn] SID 中以下被试未被清理（可能 decision.csv 无行或 choice 非 device_rr/ecg_rr）：{missing}")
 
     # 输出汇总 QC
     if summary_records:
