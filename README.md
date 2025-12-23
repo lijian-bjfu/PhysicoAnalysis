@@ -184,6 +184,9 @@ make_windowing_ecg_plot(
 宽表数据保存在 data/final/wide_table.csv；长表数据保存在 data/final/long_table.csv
 
 # 对数据结果进行基本数据描述
+
+操作方法：`12_data_description.py`
+
 分析内容包括
 - 每个被试的均值 / 标准差 / CV
     - desc_rmssd_ms_by_subject_id.csv
@@ -252,6 +255,14 @@ make_windowing_ecg_plot(
 - 用 CV 看数据质量
 	- cv 很大而 mean 很小的被试，可能存在噪声特别大的窗或清理不彻底。
 	- 可以把 CV 排序选前若干名，回去看这些被试对应的 RR / ECG 图。
+
+# 对数据结构进行探索，深入理解数据
+
+操作方法：`13_data_explor.py`
+
+# 计算简版的LMM
+
+操作方法：`14_mixedLM.py`
 
 # Z score 分析数据
 

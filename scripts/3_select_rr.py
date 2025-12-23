@@ -21,7 +21,7 @@ SRC_NORM_DIR = (DATA_DIR / paths["norm"]).resolve()
 RR_OUT_DIR   = (DATA_DIR / paths["confirmed"]).resolve()
 PREVIEW_DIR  = (PROCESSED_DIR / "rr_select" / ACTIVE_DATA).resolve()
 PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
-PRE_SID = DATASETS[ACTIVE_DATA]["preview_sids"]
+SID = DATASETS[ACTIVE_DATA]["preview_sids"]
 
 # 画图横轴范围策略，基于事件标注起始点绘制，基于hr波长起始点
 # 'auto' | 'events' | 'hr'
@@ -33,9 +33,9 @@ DEC_FILE = PREVIEW_DIR / "decision.csv"
 
 # 仅对列表中被试的结果绘图，用于快速检验。列表为空时，输出所有被试数据
 # 可以在settings中设置, 如果嫌麻烦，在这里设置亦可
-# 最后第二阶段也会查看 PRE_SID 列表。只对列表中包含的这些被试生成最终的RR
+# 最后第二阶段也会查看 SID 列表。只对列表中包含的这些被试生成最终的RR
 # 如果该列表为空也会生成 RR 
-PRE_SID = [
+SID = [
     "P001S001T001R001",
     "P002S001T002R001",
     "P003S001T001R001",
@@ -601,12 +601,12 @@ def main():
     # 找到所有 被测id <sid>（有 rr 或 ecg 的算）
     sids = sorted({p.stem.split("_")[0] for p in SRC_NORM_DIR.glob("*_rr.csv")}|{p.stem.split("_")[0] for p in SRC_NORM_DIR.glob("*_ecg.*")})
 
-    # 预览集合：由 PRE_SID 决定（空表示全部预览）；数据分析集合始终为全部被试
-    DRAW_SIDS = set(PRE_SID) if isinstance(PRE_SID, (list, tuple)) and len(PRE_SID) > 0 else set()
+    # 预览集合：由 SID 决定（空表示全部预览）；数据分析集合始终为全部被试
+    DRAW_SIDS = set(SID) if isinstance(SID, (list, tuple)) and len(SID) > 0 else set()
     if len(DRAW_SIDS) > 0:
         print(f"[preview] 仅为以下被试保存预览图：{sorted(DRAW_SIDS)}")
     else:
-        print("[preview] PRE_SID 为空：将为全部被试保存预览图。")
+        print("[preview] SID 为空：将为全部被试保存预览图。")
 
     if not sids:
         print(f"[err] {SRC_NORM_DIR} 下没找到 *_rr.csv 或 *_ecg.*"); return
@@ -642,7 +642,7 @@ def main():
         if out_rows:
             pd.DataFrame(out_rows).to_csv(PREVIEW_DIR / "final_rr_summary.csv", index=False)
             print(f"[save] 最终 RR 概览 → {PREVIEW_DIR/'final_rr_summary.csv'}")
-        print("[done] ECG-only 模式：已为全部被试生成最终 RR（跳过建议/决策第二阶段）。PRE_SID 仅影响是否保存预览图。")
+        print("[done] ECG-only 模式：已为全部被试生成最终 RR（跳过建议/决策第二阶段）。SID 仅影响是否保存预览图。")
         return
 
     # 第一阶段：若没有决策表，就只做建议
@@ -789,16 +789,16 @@ def main():
         return
 
     # 第二阶段，读取决策，生成最终 RR（只为“目标被试”）：
-    # - 若 PRE_SID 为空：对 decision.csv 中的全部 subject_id 生成；
-    # - 若 PRE_SID 非空：仅对 PRE_SID 列表中的被试生成（即使 decision.csv 里有更多被试）。
+    # - 若 SID 为空：对 decision.csv 中的全部 subject_id 生成；
+    # - 若 SID 非空：仅对 SID 列表中的被试生成（即使 decision.csv 里有更多被试）。
     dec = pd.read_csv(DEC_FILE)
 
     target_sids = None
-    if isinstance(PRE_SID, (list, tuple)) and len(PRE_SID) > 0:
-        target_sids = set([str(x).strip() for x in PRE_SID if str(x).strip()])
-        print(f"[final] 仅生成 PRE_SID 中被试的最终RR：{sorted(target_sids)}")
+    if isinstance(SID, (list, tuple)) and len(SID) > 0:
+        target_sids = set([str(x).strip() for x in SID if str(x).strip()])
+        print(f"[final] 仅生成 SID 中被试的最终RR：{sorted(target_sids)}")
     else:
-        print("[final] PRE_SID 为空：将对 decision.csv 中全部被试生成最终RR。")
+        print("[final] SID 为空：将对 decision.csv 中全部被试生成最终RR。")
 
     out_rows = []
     done_sids = set()
@@ -809,7 +809,7 @@ def main():
             print("[warn] decision.csv 存在空的 subject_id 行，已跳过")
             continue
 
-        # 若指定了目标集合，则只处理 PRE_SID 列表内的被试
+        # 若指定了目标集合，则只处理 SID 列表内的被试
         if target_sids is not None and sid not in target_sids:
             continue
 
@@ -834,11 +834,11 @@ def main():
         out_rows.append({"subject_id": sid, "rows": len(rr), "source": choice})
         done_sids.add(sid)
 
-    # 若 PRE_SID 非空，提示有哪些被试在 decision.csv 中未覆盖
+    # 若 SID 非空，提示有哪些被试在 decision.csv 中未覆盖
     if target_sids is not None:
         missing = sorted(list(target_sids - done_sids))
         if len(missing) > 0:
-            print(f"[warn] PRE_SID 中以下被试未在 decision.csv 中生成（可能缺少行或被跳过）：{missing}")
+            print(f"[warn] SID 中以下被试未在 decision.csv 中生成（可能缺少行或被跳过）：{missing}")
     if out_rows:
         pd.DataFrame(out_rows).to_csv(PREVIEW_DIR/"final_rr_summary.csv", index=False)
         print(f"[save] 最终 RR 保存 → { RR_OUT_DIR }")

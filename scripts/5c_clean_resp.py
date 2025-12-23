@@ -186,9 +186,15 @@ PRETRIM_MIN_CLIP_RUN_S = float(PARAMS.get("resp_pretrim_min_clip_run_s", 3.0))
 PRETRIM_MIN_COLLAPSE_RUN_S = float(PARAMS.get("resp_pretrim_min_collapse_run_s", MIN_COLLAPSE_RUN_S))
 
 # Step 3（平台峰规范化：不删窗，只让平顶峰“中心点唯一最高”，便于下游稳定取相位）
+# 点位相差多少算平台 tol 越大会将落差更大的点都当作在一个平面上，从而可能会扩大被识别为“平顶子”的点
 PLATEAU_TOL = int(PARAMS.get("resp_plateau_tol", 1))
+# 多长的平面才算平台，特别短的叫尖峰，用这个值区分尖峰和平顶子。
+# 计算时用此值 * 50hz,比如0.08*50 = 4 表示4个点就会触发平顶子识别
 PLATEAU_MIN_LEN_S = float(PARAMS.get("resp_plateau_min_len_s", 0.08))
+# 这个概念比较抽象，大致理解为搜索平顶子的范围阈值，单位秒。值越大搜索范围越大。
+# 该值太大容易错误地把边上的峰当成自己的，太小搜不全。0.4 -1.0 范围差不多
 PLATEAU_SEARCH_S = float(PARAMS.get("resp_plateau_search_s", 0.60))
+# 把中点两侧的值压低一定程度，保证中点最高，从而形成峰尖，以便后续方便找峰。一般保持1即可。
 PLATEAU_DROP_DV = int(PARAMS.get("resp_plateau_drop_dv", 1))
 
 # 输出

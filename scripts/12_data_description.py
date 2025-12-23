@@ -27,7 +27,6 @@ LONGTABLE = (DATA_DIR / paths["final"] / "long_table.csv").resolve()
 WIDETABLE = (DATA_DIR / paths["final"] / "wide_table.csv").resolve()
 OUT_ROOT = (SRC_DIR / "data_description" ).resolve()
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
-# OUT_FILE = ...输出文件放在 SRC_DIR 这个文件夹下，可能有好几个，你来设计名字，名字不要太长
 
 # ！！因变量需要包含在 settings 中的 signal_features 列表中！！
 dependent_vars = [
