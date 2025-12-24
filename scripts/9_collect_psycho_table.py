@@ -16,6 +16,8 @@ for _ in range(6):
 
 from settings import DATASETS, ACTIVE_DATA, DATA_DIR
 
+condition = "task"
+
 def select_folder(title="请选择包含t0, t1, t2 CSV文件的文件夹"):
     """
     打开一个系统文件夹选择对话框，让用户选择文件夹。
@@ -277,7 +279,7 @@ def parse_psycho_indices(psycho_indices: list):
     base_time_vars = sorted(list(base_time_vars_set))
     return time_points, rename_maps, static_vars, base_time_vars
 
-def process_data(input_dir: Path, psycho_indices: list, out_root_path: Path):
+def process_data(input_dir: Path, psycho_indices: list, out_root_path: Path, condi_file: Path | None = None):
     """
     核心处理逻辑：读取CSV，重塑为长表。
     [修改] 泛化处理静态变量：只要CSV里有 settings 定义的静态变量，就保留。
@@ -285,76 +287,109 @@ def process_data(input_dir: Path, psycho_indices: list, out_root_path: Path):
     try:
         print(f"--- 1. 正在解析 'psycho_indices' 列表... ---")
         time_points, rename_maps, static_vars, base_time_vars = parse_psycho_indices(psycho_indices)
-        
+
+        # --- [新增] 清理静态变量：合并/去重 `_Tn` 拷贝，只保留一个并去掉后缀 ---
+        # 例如 fss_T3, fss_T2 同时存在时，只保留 n 最大的那个，并重命名为 fss
+        # 说明：这一步仅作用于静态变量（非 t0_xxx 这种重复测量规则的变量）。
+        _static_best = {}  # base -> (n, original_name)
+        _static_plain = set()  # 记录无 _Tn 后缀的静态变量
+        _re_t_suffix = re.compile(r"^(?P<base>.+)_T(?P<n>\d+)$")
+
+        for v in list(static_vars):
+            m = _re_t_suffix.match(v)
+            if m:
+                base = m.group('base')
+                n = int(m.group('n'))
+                prev = _static_best.get(base)
+                if prev is None or n > prev[0]:
+                    _static_best[base] = (n, v)
+            else:
+                _static_plain.add(v)
+
+        # 生成：要保留的静态变量 base 名称列表（去掉 _Tn）
+        cleaned_static_vars = sorted(list(_static_plain.union(_static_best.keys())))
+
+        # 生成：静态变量重命名映射（仅对被保留的那一列执行 rename）
+        static_rename_map = {}
+        for base, (_n, orig) in _static_best.items():
+            static_rename_map[orig] = base
+
+        # 更新 static_vars 为清理后的 base 名称
+        static_vars = cleaned_static_vars
+
+        if static_rename_map:
+            kept = [f"{orig}→{base}" for orig, base in static_rename_map.items()]
+            print(f"    静态变量已去重并去后缀(_Tn)，保留映射: {kept}")
+
         if not time_points:
             print("[致命错误] 未找到任何时间点，程序终止。", file=sys.stderr)
             return
 
         OUT_FILE = out_root_path / "psycho.csv"
         out_root_path.mkdir(parents=True, exist_ok=True)
-        
+
         print(f"    将扫描的时间点文件: {time_points}")
         print(f"    需要寻找的静态指标: {static_vars}")
 
         print("\n--- 2. 正在加载CSV文件... ---")
         all_dfs = []
-        
-        for time_point in time_points: 
-            file_name = f"{time_point}.csv" 
+
+        for time_point in time_points:
+            file_name = f"{time_point}.csv"
             file_path = input_dir / file_name
-            
+
             if not file_path.exists():
                 print(f"    [跳过] 文件不存在: {file_name}")
                 continue
 
             print(f"    正在读取: {file_path}")
-            
+
             # 读取原始数据
             df = pd.read_csv(file_path)
-            
+
             if 'subject_id' not in df.columns:
                 raise KeyError(f"文件 '{file_name}' 中缺失 'subject_id' 列。")
-            
+
             # 设索引
-            df['subject_id'] = df['subject_id'].astype(str).str.strip() 
+            df['subject_id'] = df['subject_id'].astype(str).str.strip()
             df = df.set_index('subject_id')
-            
+
             # 提取时间 time
             try:
                 time_num = int(re.search(r'\d+', time_point).group())
             except:
-                time_num = 0 
-            df['time'] = time_num 
-            
-            # --- 核心修改开始 ---
-            
+                time_num = 0
+            df['time'] = time_num
+
             # 1. 动态变量重命名
             # 获取当前时间点应该有的动态变量映射 (e.g., {'t1_STAI': 'STAI'})
             current_rename_map = rename_maps.get(time_point, {})
             df = df.rename(columns=current_rename_map)
-            
+
+            # 1.1 静态变量重命名：将 *_Tn 重命名为 base 名（仅对被选中的那一列）
+            if static_rename_map:
+                df = df.rename(columns=static_rename_map)
+
             # 2. 筛选列：只保留 (time) + (重命名后的动态变量) + (当前文件里存在的静态变量)
-            
+
             # A. 想要保留的动态列 (base_time_vars 中存在于当前 df 的)
             cols_to_keep = ['time']
             for col in df.columns:
-                if col in current_rename_map.values(): # 是重命名后的动态变量
+                if col in current_rename_map.values():
                     cols_to_keep.append(col)
-            
+
             # B. 想要保留的静态列 (static_vars 中存在于当前 df 的)
             found_static = []
             for static_var in static_vars:
                 if static_var in df.columns:
                     cols_to_keep.append(static_var)
                     found_static.append(static_var)
-            
+
             if found_static:
                 print(f"      -> 发现静态指标: {found_static}")
-            
+
             # 只保留有用列，避免无关数据混入
             df = df[cols_to_keep]
-            
-            # --- 核心修改结束 ---
 
             all_dfs.append(df)
 
@@ -381,8 +416,155 @@ def process_data(input_dir: Path, psycho_indices: list, out_root_path: Path):
                 # 注意：前提是同一个人的静态变量在不同时间点是一样的（或者只出现一次）
                 df_long[static_var] = df_long.groupby('subject_id')[static_var].transform('first')
 
+        # --- [新增] 从分组文件 (groups.csv) 合并条件变量，并编码为 0/1 ---
+        cond01 = f"{condition}01"  # e.g., task01
+
+        # groups.csv 预期格式：subject_id,task
+        if condi_file is not None and Path(condi_file).exists():
+            g = pd.read_csv(condi_file)
+            if 'subject_id' not in g.columns or condition not in g.columns:
+                raise KeyError(f"分组文件缺少必要列：需要 'subject_id' 与 '{condition}'。实际列为: {list(g.columns)}")
+
+            # ！！！！ 注意：T1/T2/T3.csv 的 subject_id 与 groups.csv 的 subject_id 不同格式
+            # - 问卷数据 subject_id：纯数字（1/2/3...，可能是字符串形式）
+            # - groups.csv subject_id：形如 P001S001T001R001（真正的被试编号是 P 后面的数字 001 -> 1）
+            # 因此：统一构造一个 numeric merge key（sid_num），在 sid_num 上对齐。
+
+            # 1) 问卷长表侧：将 subject_id 转为数值 merge key
+            df_long['_sid_num'] = pd.to_numeric(df_long['subject_id'], errors='coerce').astype('Int64')
+
+            # 2) 分组文件侧：从 P 后提取数字作为 merge key
+            g['subject_id'] = g['subject_id'].astype(str).str.strip()
+            g['_sid_num'] = g['subject_id'].str.extract(r'^[Pp]\s*0*(\d+)', expand=False)
+            g['_sid_num'] = pd.to_numeric(g['_sid_num'], errors='coerce').astype('Int64')
+
+            # 3) task 列尽量转数值（允许原始为字符串 '1'/'2'）
+            g[condition] = pd.to_numeric(g[condition], errors='coerce')
+
+            # 4) 合并：在 _sid_num 上左连接（保持问卷长表的行）
+            df_long = df_long.merge(g[['_sid_num', condition]], on='_sid_num', how='left')
+
+            # 5) 合并诊断：如果完全未命中，提示可能的原因
+            n_total = len(df_long)
+            n_hit = int(df_long[condition].notna().sum())
+            hit_rate = (n_hit / n_total) if n_total else 0.0
+            print(f"    分组对齐: 命中 {n_hit}/{n_total} 行 (hit_rate={hit_rate:.3f})")
+            if n_hit == 0:
+                left_ids = sorted(df_long['_sid_num'].dropna().unique().tolist())[:10]
+                right_ids = sorted(g['_sid_num'].dropna().unique().tolist())[:10]
+                print(f"[警告] 分组对齐失败：问卷侧 sid_num 示例(前10)={left_ids}; groups侧 sid_num 示例(前10)={right_ids}。\n"
+                      f"       请检查：问卷 subject_id 是否确为纯数字；groups.csv 是否以 P 开头且含数字编号；以及两边编号是否同一套。",
+                      file=sys.stderr)
+
+            # 6) 清理临时 merge key（保留原始 subject_id，不改变输出标识）
+            df_long = df_long.drop(columns=['_sid_num'], errors='ignore')
+
+            # 编码为 0/1：按数值从小到大映射
+            s = df_long[condition]
+            uniq = sorted(pd.unique(s.dropna()).tolist())
+            if len(uniq) == 0:
+                df_long[cond01] = pd.Series(pd.NA, index=df_long.index, dtype='Int64')
+                print(f"[警告] 分组文件 '{condi_file}' 中未检测到有效的 '{condition}' 值，已创建全缺失列 '{cond01}'。", file=sys.stderr)
+            elif set(uniq).issubset({0, 1}) and len(uniq) <= 2:
+                df_long[cond01] = s.astype('Int64')
+            elif len(uniq) == 2:
+                mapping = {uniq[0]: 0, uniq[1]: 1}
+                df_long[cond01] = s.map(mapping).astype('Int64')
+                print(f"    条件变量 '{condition}' 数值编码映射: {mapping}")
+            else:
+                mapping = {uniq[0]: 0, uniq[1]: 1}
+                df_long[cond01] = s.map(mapping).astype('Int64')
+                print(f"[警告] 条件变量 '{condition}' 检测到 >2 个水平: {uniq}。仅保留前两类映射 {mapping}，其余置为缺失。", file=sys.stderr)
+
+        else:
+            # 没有提供分组文件或文件不存在
+            df_long[cond01] = pd.Series(pd.NA, index=df_long.index, dtype='Int64')
+            print(f"[警告] 分组文件不存在或未提供：{condi_file}。已创建全缺失列 '{cond01}'。", file=sys.stderr)
+
+        # 输出只保留 task01，不保留原始 task
+        if condition in df_long.columns:
+            df_long = df_long.drop(columns=[condition])
+
+        # 3) 为所有界面/体验类截面变量生成去中心化版本 (_c) 与交互项 (_inter)
+        #    这里默认将 static_vars 中的“界面数据”视为交互候选；排除明显的背景/人口学变量。
+        exclude_static = {
+            'sex', 'age', 'art_exp', 'color_exp', 'art_join', 'ipad_exp', 'health',
+            cond01,
+        }
+
+        centered_cols = []
+        inter_cols = []
+
+        # 用被试层面均值做 grand-mean centering（避免长表多行重复导致均值被重复计数）
+        if static_vars:
+            for v in static_vars:
+                if v in exclude_static:
+                    continue
+                if v not in df_long.columns:
+                    continue
+
+                # 只对可转换为数值的变量做中心化与交互
+                s_v = pd.to_numeric(df_long[v], errors='coerce')
+                # 被试层面取 first，再算 grand mean
+                subj_mean = s_v.groupby(df_long['subject_id']).first().mean(skipna=True)
+
+                c_name = f"{v}_c"
+                df_long[c_name] = s_v - subj_mean
+                centered_cols.append(c_name)
+
+                inter_name = f"{v}_inter"
+                df_long[inter_name] = df_long[c_name] * df_long[cond01].astype(float)
+                inter_cols.append(inter_name)
+
+        # --- 重复测量变量差值 (delta) ---
+        # 规则：对每个重复测量变量 var，生成 var{to}{from} = var@time=to - var@time=from
+        # 例如 stai21 = stai(t2) - stai(t1), stai32 = stai(t3) - stai(t2), stai31 = stai(t3) - stai(t1)
+        delta_cols = []
+        if base_time_vars:
+            # [修复] 差值计算要求数值型。CSV 中常见的缺失/异常会导致列被读成 object/str，
+            # 例如空字符串、"NA"、"nan" 等，进而在做减法时报错。
+            # 这里统一将所有重复测量变量强制转为数值；无法解析的值会被置为 NaN。
+            for var in base_time_vars:
+                if var in df_long.columns:
+                    # 先把纯空白转为缺失，再做数值转换
+                    df_long[var] = df_long[var].replace(r'^\s*$', pd.NA, regex=True)
+                    df_long[var] = pd.to_numeric(df_long[var], errors='coerce')
+            # pivot 成宽表，便于按 (var, time) 取值
+            wide = df_long.pivot_table(
+                index='subject_id',
+                columns='time',
+                values=base_time_vars,
+                aggfunc='first'
+            )
+            # 使用实际出现过的 time 值来生成差值对（保证与数据一致）
+            time_vals = sorted(
+                df_long['time'].dropna().astype(int).unique().tolist()
+            )
+
+            delta_data = {}
+            for var in base_time_vars:
+                for i, t_from in enumerate(time_vals):
+                    for t_to in time_vals[i+1:]:
+                        col_name = f"{var}{t_to}{t_from}"
+                        delta_cols.append(col_name)
+
+                        s_to = wide.get((var, t_to))
+                        if s_to is None:
+                            s_to = pd.Series(float('nan'), index=wide.index)
+
+                        s_from = wide.get((var, t_from))
+                        if s_from is None:
+                            s_from = pd.Series(float('nan'), index=wide.index)
+
+                        delta_data[col_name] = s_to - s_from
+
+            # 合并回长表：差值变量按 subject_id 广播到所有 time 行
+            if delta_data:
+                df_deltas = pd.DataFrame(delta_data, index=wide.index).reset_index()
+                df_long = df_long.merge(df_deltas, on='subject_id', how='left')
+
         # --- 4. 清理 ---
-        final_cols = ['subject_id', 'time'] + base_time_vars + static_vars
+        final_cols = ['subject_id', 'time'] + base_time_vars + delta_cols + static_vars + [f"{condition}01"] + centered_cols + inter_cols
         df_final = df_long.reindex(columns=final_cols)
         df_final = df_final.sort_values(by=['subject_id', 'time'])
 
@@ -406,7 +588,9 @@ def main():
         DS = DATASETS[ACTIVE_DATA]
         paths = DS.get("paths", {})
         PSYCHO_INDICES = DS.get("psycho_indices", [])
+        CONDI_FILE = (DATA_DIR / paths["groups"] / "groups.csv").resolve()
         OUT_ROOT = (DATA_DIR / paths.get("psycho")).resolve()
+        DS = DATASETS[ACTIVE_DATA]
     
     except KeyError as e:
         print(f"[错误] settings.py 配置有误，缺少键: {e}", file=sys.stderr)
@@ -421,7 +605,7 @@ def main():
     
     if input_dir:
         # --- 步骤 3: 执行核心处理逻辑 ---
-        process_data(input_dir, PSYCHO_INDICES, OUT_ROOT)
+        process_data(input_dir, PSYCHO_INDICES, OUT_ROOT, CONDI_FILE)
 
 if __name__ == "__main__":
     main()

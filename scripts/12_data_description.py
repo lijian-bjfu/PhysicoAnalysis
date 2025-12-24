@@ -30,9 +30,11 @@ OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 # ！！因变量需要包含在 settings 中的 signal_features 列表中！！
 dependent_vars = [
-    "hf_log_ms2",
-    "rmssd_ms",
-    "mean_hr_bpm",
+    # "hf_log_ms2",
+    # "rmssd_ms",
+    # "mean_hr_bpm",
+    "smm",
+    "sbm",
 ]
 # 被测 ID 变量名,该变量为字符串，例如 "P006S001T002R001"
 subject_id = "subject_id"
@@ -449,7 +451,7 @@ def _round_numeric(df: pd.DataFrame, digits: int = 3) -> pd.DataFrame:
 
 def main():
     print(f"[info] 读取长表数据: {LONGTABLE}")
-    df = pd.read_csv(LONGTABLE)
+    df = pd.read_csv(LONGTABLE, na_values=["", " ", "NA", "N/A"])
 
     # 检查必要列是否存在
     required_cols = {subject_id, condition, time}
@@ -470,6 +472,15 @@ def main():
 
     for var in tqdm(available_vars, desc="variables"):
         print(f"[info] 处理因变量: {var}")
+
+        # --- 强制将当前因变量转换为数值类型 ---
+        # long_table.csv 中同一列可能混入字符串/空字符串，导致 groupby.mean 报错：
+        # TypeError: unsupported operand type(s) for +: 'int' and 'str'
+        if var in df.columns:
+            df[var] = pd.to_numeric(df[var], errors="coerce")
+            if df[var].notna().sum() == 0:
+                print(f"[warn] 因变量 {var} 转换为数值后全为缺失（NaN），将跳过该变量。")
+                continue
 
         # 1. 每个被试的描述统计
         by_subj = _describe_by_subject(df, var, subject_id)

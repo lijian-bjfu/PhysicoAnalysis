@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 from typing import List, Dict, Optional
 from tqdm import tqdm
 
@@ -44,15 +45,15 @@ def _tag_xyz(x: str, y: str, z: Optional[str]) -> str:
 subject_id = "pid"
 
 # 分组变量，0=实验组，1=对照组
-condition = "task01"
+condition = "task"
 
 # 默认分析变量（可在此处快速切换）
 # X: predictor
 # Y: outcome
 # Z: third variable for color/size encoding
-X = "stai_T2"        # Flow (total)
-Y = "stai_T3"        # ΔSTAI (T3 - T2), negative = recovery
-Z = "hr32"       # Anxiety at T2
+X = "stai_T2"        
+Y = "stai_T3"        
+Z = "fss_selflessness_T3"
 
 
 def scatter_by_group(
@@ -119,6 +120,18 @@ def scatter_by_group(
     fig.savefig(out_path, dpi=300)
     plt.close(fig)
 
+def draw_hist(ax, fig, X, Y, Z, condition, OUT_ROOT):
+    ax.xaxis.set_major_locator(mticker.MaxNLocator(nbins=6))
+    ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+    for lbl in ax.get_xticklabels():
+        lbl.set_rotation(30)
+        lbl.set_ha("right")
+
+    fig.tight_layout()
+    tag = _tag_xyz(X, Y, Z)
+    fig.savefig(OUT_ROOT / f"hist__{tag}__by_{_safe_name(condition)}.png", dpi=300)
+    plt.close(fig)
+
 
 def main():
     print(f"[info] Loading data: {WIDETABLE}")
@@ -148,16 +161,31 @@ def main():
 
     # ---- Plot 2: Y distribution by group ----
     fig, ax = plt.subplots(figsize=(6, 5))
+
+    # Convert to numeric once for histogram use; keep original df intact.
+    y_num = pd.to_numeric(df[Y], errors="coerce")
+
+    # Use a shared binning so the two groups are directly comparable.
+    y_all = y_num.dropna().to_numpy()
+    if y_all.size >= 2:
+        bin_edges = np.histogram_bin_edges(y_all, bins=10)
+    else:
+        bin_edges = 10
+
     for g in sorted(df[condition].dropna().unique()):
-        sub = df[df[condition] == g][Y]
-        ax.hist(sub, bins=10, alpha=0.6, label=f"{condition}={g}")
+        mask = (df[condition] == g)
+        sub = y_num[mask].dropna().to_numpy()
+        if sub.size == 0:
+            continue
+        ax.hist(sub, bins=bin_edges, alpha=0.6, label=f"{condition}={g}")
+
     ax.set_xlabel(Y)
     ax.set_ylabel("Count")
     ax.legend()
-    fig.tight_layout()
-    tag = _tag_xyz(X, Y, Z)
-    fig.savefig(OUT_ROOT / f"hist__{tag}__by_{_safe_name(condition)}.png", dpi=300)
-    plt.close(fig)
+
+    # Make x-axis tick labels readable (avoid the long repeating decimals problem).
+
+    # draw_hist(ax, fig, X, Y, Z, condition, OUT_ROOT)
 
     print(f"[info] Figures saved to: {OUT_ROOT}")
 

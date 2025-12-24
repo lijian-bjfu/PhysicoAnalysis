@@ -152,6 +152,7 @@ def _extract_sid_num(x) -> int | None:
         return None
 
 
+
 def _to_merge_id(x) -> str:
     """
     统一生成用于合并的键：优先提取数值 ID（如 P001 → 1），否则用原始 subject_id 的字符串形式。
@@ -161,6 +162,52 @@ def _to_merge_id(x) -> str:
     if n is not None:
         return str(int(n))
     return str(x).strip()
+
+
+# === 辅助函数：空白/全空列处理 ===
+def _blank_to_na(s: pd.Series) -> pd.Series:
+    """将空白/常见缺失字符串统一为 NA，用于后续 drop-all-empty 判定。"""
+    if s.dtype == object:
+        ss = s.astype(str).str.strip()
+        ss = ss.replace({
+            "": pd.NA,
+            "NA": pd.NA, "NaN": pd.NA, "nan": pd.NA,
+            "None": pd.NA, "null": pd.NA, "NULL": pd.NA,
+        })
+        # 保留原 dtype 的缺失表达
+        return ss
+    return s
+
+
+def _drop_all_empty_columns(df: pd.DataFrame, keep: set[str] | None = None) -> pd.DataFrame:
+    """删除整列为空（全 NA 或全空白字符串）的列。keep 中的列永远保留。"""
+    keep = keep or set()
+    out = df.copy()
+
+    for c in list(out.columns):
+        if c in keep:
+            continue
+        if out[c].dtype == object:
+            out[c] = _blank_to_na(out[c])
+        else:
+            # 数值列无需特殊处理
+            pass
+
+    # dropna(axis=1, how='all') 会删除全 NA 列
+    out = out.dropna(axis=1, how='all')
+
+    # 对仍为 object 的列，再做一次“全空白”保险（极端情况下 dropna 不会删）
+    drop_cols = []
+    for c in out.columns:
+        if c in keep:
+            continue
+        if out[c].dtype == object:
+            ss = out[c].astype(str).str.strip()
+            if (ss == "").all():
+                drop_cols.append(c)
+    if drop_cols:
+        out = out.drop(columns=drop_cols)
+    return out
 
 
 # === meaning 清洗与窗口标签解析 ===
@@ -428,7 +475,9 @@ def _pivot_psycho(psy: pd.DataFrame) -> pd.DataFrame:
     """
     心理侧展开策略（使用 _merge_id 作为键）：
     A) 若存在 time 列（长表）：除 subject_id/time 外的所有列都按 *_T{time} 展开；
+       但对“截面变量”（同一被试各 time 不变）仅保留最后 time，并去掉 _Tn 后缀。
     B) 若不存在 time，但存在宽表列名形如 t{n}_var：重命名为 var_T{n} 并对 _merge_id 去重合并；
+       若某 base_Tn 多列完全一致，则只保留最大 T 并去掉 _Tn 后缀。
     其余列（如 flow 这类一次性指标）直接保留为单列。
     输出包含：_merge_id 以及各 *_T{t} 列（不保留 subject_id）。
     """
@@ -444,13 +493,43 @@ def _pivot_psycho(psy: pd.DataFrame) -> pd.DataFrame:
         value_cols = [c for c in df.columns if c not in {"subject_id", "_merge_id", "time"}]
         if not value_cols:
             raise ValueError("psycho.csv 仅含 subject_id 与 time，缺少心理指标列。")
-        out = pd.DataFrame({"_merge_id": df["_merge_id"].drop_duplicates().sort_values()})
+
+        # 预先清理：把空白字符串转为缺失，便于识别“截面变量”（同一被试各 time 不变）
         for v in value_cols:
+            if v in df.columns and df[v].dtype == object:
+                df[v] = _blank_to_na(df[v])
+
+        time_vals = sorted([int(t) for t in df["time"].dropna().unique().tolist()])
+        max_t = max(time_vals) if time_vals else None
+
+        out = pd.DataFrame({"_merge_id": df["_merge_id"].drop_duplicates().sort_values()})
+
+        for v in value_cols:
+            # —— 识别截面变量：对每个被试看该变量在不同 time 的非缺失取值是否基本不变 ——
+            # 以 nunique<=1 的被试占比作为判据；默认阈值 0.90
+            nun = df.groupby("_merge_id")[v].nunique(dropna=True)
+            frac_static = (nun <= 1).mean() if len(nun) else 0.0
+            is_static = (len(time_vals) >= 2) and (frac_static >= 0.90)
+
             pv = df.pivot_table(index="_merge_id", columns="time", values=v, aggfunc="first").reset_index()
-            new_cols = {t: f"{v}_T{int(t)}" for t in pv.columns if t != "_merge_id" and pd.notna(t)}
-            pv = pv.rename(columns=new_cols)
-            keep = ["_merge_id"] + list(new_cols.values())
-            out = out.merge(pv[keep], on="_merge_id", how="outer")
+
+            if is_static and max_t is not None:
+                # 只保留最后一个时间点，并去掉 _Tn 后缀
+                col_keep = max_t
+                if col_keep in pv.columns:
+                    pv = pv.rename(columns={col_keep: v})
+                    out = out.merge(pv[["_merge_id", v]], on="_merge_id", how="outer")
+                else:
+                    # 没有对应列就仍然输出全 NA 的 v
+                    tmp = pd.DataFrame({"_merge_id": pv["_merge_id"], v: pd.NA})
+                    out = out.merge(tmp, on="_merge_id", how="outer")
+            else:
+                # 重复测量：按 *_T{time} 展开
+                new_cols = {t: f"{v}_T{int(t)}" for t in pv.columns if t != "_merge_id" and pd.notna(t)}
+                pv = pv.rename(columns=new_cols)
+                keep_cols = ["_merge_id"] + list(new_cols.values())
+                out = out.merge(pv[keep_cols], on="_merge_id", how="outer")
+
         cols = ["_merge_id"] + [c for c in out.columns if c != "_merge_id"]
         return out.reindex(columns=cols)
 
@@ -470,6 +549,38 @@ def _pivot_psycho(psy: pd.DataFrame) -> pd.DataFrame:
     for c in [col for col in renamed.columns if col not in {"subject_id", "_merge_id"}]:
         s = renamed.groupby("_merge_id", as_index=False)[c].first()
         wide = wide.merge(s, on="_merge_id", how="left")
+    # [新增] 若已是宽表形式且存在 base_Tn 的多列拷贝，尝试去重：
+    # 规则：对同一 base，若不同 T 列在所有行上完全一致（忽略 NA），则视为截面拷贝，保留最大 T 并重命名为 base。
+    t_pat2 = re.compile(r"^(?P<base>.+)_T(?P<n>\d+)$")
+    groups: dict[str, list[tuple[int, str]]] = {}
+    for c in wide.columns:
+        m = t_pat2.match(c)
+        if m and c != "_merge_id":
+            base = m.group('base')
+            n = int(m.group('n'))
+            groups.setdefault(base, []).append((n, c))
+
+    for base, items in groups.items():
+        if len(items) <= 1:
+            continue
+        items_sorted = sorted(items, key=lambda x: x[0])
+        # 判定是否“完全一致”（忽略 NA）
+        cols_ = [c for _, c in items_sorted]
+        ref = wide[cols_[0]]
+        identical = True
+        for c in cols_[1:]:
+            a = ref
+            b = wide[c]
+            # 逐元素一致：a==b 或 任一为 NA
+            ok = (a.eq(b)) | (a.isna()) | (b.isna())
+            if not bool(ok.all()):
+                identical = False
+                break
+        if identical:
+            n_max, c_max = max(items_sorted, key=lambda x: x[0])
+            wide = wide.rename(columns={c_max: base})
+            drop_cols = [c for _, c in items_sorted if c != c_max]
+            wide = wide.drop(columns=drop_cols)
     cols = ["_merge_id"] + [c for c in wide.columns if c != "_merge_id"]
     return wide.reindex(columns=cols)
 
@@ -486,6 +597,14 @@ def build_wide_table() -> pd.DataFrame:
 
     # 合并宽表（以 _merge_id 为键）
     wide = phy_wide.merge(psy_wide, on="_merge_id", how="left", validate="1:1").drop(columns=["_merge_id"])
+
+    # [新增] 删除整列为空/空白的变量列（保留 subject_id 与组别列）
+    keep_cols = {"subject_id"}
+    if "task" in wide.columns:
+        keep_cols.add("task")
+    if "group" in wide.columns:
+        keep_cols.add("group")
+    wide = _drop_all_empty_columns(wide, keep=keep_cols)
 
     # [修改] 强制转数值类型，无法转换的变为 NaN (errors='coerce')
     cols_to_numeric = ["stai_T0", "stai_T1", "stai_T2", "stai_T3"]
@@ -508,9 +627,17 @@ def build_wide_table() -> pd.DataFrame:
     physio_long = _build_physio_long(phy)
     long_df = _merge_psycho_into_long(physio_long, psy)
 
+    # [新增] 删除长表中整列为空/空白的变量列（保留标识列）
+    keep_long = {"subject_id", "w_id", "t_id", "role", "phase_level", "t_level", "w_s", "w_e", "meaning", "phase_level_code"}
+    if "task" in long_df.columns:
+        keep_long.add("task")
+    if "group" in long_df.columns:
+        keep_long.add("group")
+    long_df2 = _drop_all_empty_columns(long_df.drop(columns=["_merge_id"], errors="ignore"), keep=keep_long)
+
     # 写长表
     long_path = OUT_ROOT / "long_table.csv"
-    long_df.drop(columns=["_merge_id"], errors="ignore").to_csv(long_path, index=False)
+    long_df2.to_csv(long_path, index=False)
 
     return wide
 
