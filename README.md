@@ -271,3 +271,7 @@ make_windowing_ecg_plot(
 该脚本生成用于 Z score 分析的数据。该数据表完全为 spss 的后续分析准备。脚本执行后会打印 变量与值的标签，可直接粘贴到spss syntax 中运行。
 
 生成的信息保存在 data/final/zscore_table.csv
+
+# 执行流程图
+
+![alt text](执行流程概念图.png)
