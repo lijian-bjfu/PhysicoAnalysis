@@ -1,0 +1,2094 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>重复测量均值可视化</title>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #111824;
+      --panel2: #0f1620;
+      --text: #e9eef6;
+      --muted: #a6b3c6;
+      --border: rgba(255,255,255,0.10);
+      --accent: #7aa2ff;
+      --danger: #ff6b6b;
+      --ok: #4ad295;
+      --shadow: 0 10px 25px rgba(0,0,0,0.30);
+      --radius: 14px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background: radial-gradient(1200px 800px at 15% 0%, rgba(122,162,255,0.20), transparent 55%),
+                  radial-gradient(900px 600px at 85% 15%, rgba(74,210,149,0.12), transparent 60%),
+                  var(--bg);
+      color: var(--text);
+    }
+
+    .app {
+      max-width: 1500px;
+      margin: 18px auto;
+      padding: 0 14px 18px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 8px 0 14px;
+    }
+
+    .title {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+
+    .subtitle {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.5;
+      max-width: 980px;
+    }
+
+    .grid {
+        display: grid;
+        grid-template-columns: 360px 1fr 320px;
+        grid-template-areas:
+            "left viz legend"
+            "left bottom bottom";
+        gap: 14px;
+        align-items: start;
+    }
+
+    /* 左列：原始数据 -> 数据设定 -> 选择数据（紧密竖排，不被其他列撑高） */
+    .leftStack {
+        grid-area: left;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        min-width: 0;
+    }
+
+    /* 底部：分组设置 -> 数据描述（竖排，横向铺满中+右两列） */
+    .bottomStack {
+        grid-area: bottom;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        min-width: 0;
+    }
+
+    /* 明确把可视化和图注放到顶行中间/右侧 */
+    .p-viz { grid-area: viz; }
+    .p-legend { grid-area: legend; }
+
+    .panel {
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent 60%), var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel .hd {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+
+    .panel .hd .label {
+      font-weight: 650;
+      font-size: 13px;
+      letter-spacing: 0.2px;
+      color: var(--text);
+    }
+
+    .panel .hd .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .panel .bd {
+      padding: 12px;
+    }
+
+    .btn {
+      appearance: none;
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      padding: 7px 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: transform 0.03s ease, background 0.15s ease, border-color 0.15s ease;
+    }
+
+    .btn:hover {
+      background: rgba(255,255,255,0.07);
+      border-color: rgba(255,255,255,0.22);
+    }
+
+    .btn:active {
+      transform: translateY(1px);
+    }
+
+    .btn.primary {
+      border-color: rgba(122,162,255,0.55);
+      background: rgba(122,162,255,0.18);
+    }
+
+    .btn.danger {
+      border-color: rgba(255,107,107,0.55);
+      background: rgba(255,107,107,0.12);
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    /* Left column: input */
+    #rawTextarea {
+      width: 100%;
+      min-height: 420px;
+      resize: vertical;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 12px;
+      padding: 10px;
+      color: var(--text);
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent 55%), var(--panel2);
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.45;
+      outline: none;
+    }
+
+    /* Raw preview table (left panel) */
+    #rawPreviewArea {
+    max-height: 420px; /* 和原 textarea 的观感接近，可自行调大/调小 */
+    }
+
+    #rawPreviewTable {
+    min-width: max-content; /* 列多时自动变宽，触发横向滚动条 */
+    font-size: 12px;
+    }
+
+    #rawPreviewTable th,
+    #rawPreviewTable td {
+    white-space: nowrap; /* 不换行，保证横向滚动有意义 */
+    }
+
+    #rawTextDetails {
+    margin-top: 10px;
+    }
+
+    #rawTextDetails > summary {
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    }
+
+    #rawTextDetails > summary::-webkit-details-marker {
+    display: none;
+    }
+
+    #rawTextDetails > summary::before {
+    content: "▸ ";
+    color: rgba(233,238,246,0.75);
+    }
+
+    #rawTextDetails[open] > summary::before {
+    content: "▾ ";
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+
+    .status {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+      white-space: pre-wrap;
+    }
+
+    .status.ok { color: rgba(74,210,149,0.95); }
+    .status.err { color: rgba(255,107,107,0.95); }
+
+    /* Center: viz */
+    #chartWrap {
+      width: 100%;
+      height: 520px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent 60%),
+                  radial-gradient(800px 500px at 30% 30%, rgba(122,162,255,0.10), transparent 60%),
+                  rgba(0,0,0,0.15);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .overlayNote {
+      position: absolute;
+      bottom: 10px;
+      left: 12px;
+      right: 12px;
+      color: rgba(233,238,246,0.82);
+      font-size: 12px;
+      line-height: 1.45;
+      background: rgba(15,22,32,0.65);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 12px;
+      padding: 8px 10px;
+      pointer-events: none;
+    }
+
+    /* Right: legend */
+    #legendList {
+      max-height: 520px;
+      overflow: auto;
+      padding-right: 6px;
+    }
+
+    .legendItem {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 8px;
+      border-radius: 10px;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+
+    .legendItem:hover {
+      background: rgba(255,255,255,0.04);
+      border-color: rgba(255,255,255,0.09);
+    }
+
+    .legendLeft {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      border: 1px solid rgba(255,255,255,0.25);
+      flex: 0 0 auto;
+    }
+
+    .legendName {
+      font-size: 12px;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 190px;
+    }
+
+    .pill {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.12);
+      color: var(--muted);
+      background: rgba(255,255,255,0.03);
+      flex: 0 0 auto;
+    }
+
+    .legendItem.selected {
+      background: rgba(122,162,255,0.12);
+      border-color: rgba(122,162,255,0.35);
+    }
+
+    /* Selection panel */
+    #selectionBox {
+      min-height: 160px;
+      max-height: 220px;
+      overflow: auto;
+      padding-right: 6px;
+    }
+
+    .selItem {
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(0,0,0,0.15);
+      border-radius: 12px;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+    }
+
+    .selItem .k {
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+
+    .selItem .v {
+      color: var(--text);
+      font-size: 12px;
+      font-family: var(--mono);
+      white-space: pre-wrap;
+      line-height: 1.45;
+    }
+
+    /* Group panel */
+    #groupsWrap {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .groupCard {
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(0,0,0,0.12);
+      border-radius: 14px;
+      padding: 10px;
+    }
+
+    .groupTop {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .groupTop .name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .groupTop input {
+      width: 240px;
+      max-width: 100%;
+      padding: 7px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(17,24,36,0.75);
+      color: var(--text);
+      outline: none;
+      font-size: 12px;
+    }
+
+    .varsGrid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .varChip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.03);
+      font-size: 12px;
+      max-width: 100%;
+    }
+
+    .varChip span {
+      font-family: var(--mono);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 220px;
+    }
+
+    .chipX {
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.16);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1;
+      padding-bottom: 1px;
+    }
+
+    .chipX:hover { border-color: rgba(255,255,255,0.25); }
+
+    .addRow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+      flex-wrap: wrap;
+    }
+
+    .addRow input {
+      width: 260px;
+      max-width: 100%;
+      padding: 7px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(17,24,36,0.75);
+      color: var(--text);
+      outline: none;
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+
+    .groupHint {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    /* Desc table */
+    .tableWrap {
+      overflow: auto;
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 12px;
+      background: rgba(0,0,0,0.10);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      min-width: 920px;
+    }
+
+    th, td {
+      padding: 9px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      vertical-align: top;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      background: rgba(15,22,32,0.95);
+      z-index: 1;
+      text-align: left;
+      color: rgba(233,238,246,0.92);
+      font-weight: 650;
+    }
+
+    td {
+      color: rgba(233,238,246,0.88);
+      font-family: var(--mono);
+    }
+
+    td.varCell {
+      font-family: var(--mono);
+      color: rgba(233,238,246,0.96);
+      white-space: nowrap;
+    }
+
+    tr:hover td {
+      background: rgba(255,255,255,0.02);
+    }
+
+    /* Placement */
+        /* Data settings panel (left, under raw data) */
+    #settingsWrap {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .fieldRow {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .fieldRow label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .fieldRow input {
+      width: 100%;
+      max-width: 220px;
+      padding: 7px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(17,24,36,0.75);
+      color: var(--text);
+      outline: none;
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+
+    #varPickToolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    #varPickList {
+      max-height: 260px;
+      overflow: auto;
+      padding-right: 6px;
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 12px;
+      background: rgba(0,0,0,0.10);
+    }
+
+    .varPickRow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .varPickRow:last-child { border-bottom: none; }
+
+    .varPickName {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: rgba(233,238,246,0.92);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .miniBtn {
+      appearance: none;
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      padding: 6px 9px;
+      border-radius: 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .miniBtn.on {
+      border-color: rgba(74,210,149,0.55);
+      background: rgba(74,210,149,0.14);
+    }
+
+    .miniBtn.off {
+      border-color: rgba(255,107,107,0.55);
+      background: rgba(255,107,107,0.12);
+    }
+
+    .warn {
+      color: rgba(255,198,107,0.95);
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 1180px) {
+        .grid {
+            grid-template-columns: 1fr;
+            grid-template-areas:
+            "left"
+            "viz"
+            "legend"
+            "bottom";
+        }
+
+        table { min-width: 720px; }
+        #rawTextarea { min-height: 320px; }
+        #chartWrap { height: 460px; }
+        #legendList { max-height: 320px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div>
+        <div class="title">重复测量均值显示</div>
+      </div>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <button class="btn primary" id="btnParse">解析并绘图</button>
+        <button class="btn danger" id="btnReset">Reset</button>
+      </div>
+    </div>
+
+<div class="grid">
+  <!-- Left column: stacked panels -->
+  <div class="leftStack">
+
+    <!-- 原始数据：左列第一个 -->
+    <section class="panel p-input">
+      <div class="hd">
+        <div class="label">原始数据</div>
+        <div class="actions">
+          <input id="fileInput" type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" style="display:none" />
+          <button class="btn" id="btnUpload">上传 CSV/TSV</button>
+          <button class="btn" id="btnPasteExample">填入示例</button>
+          <button class="btn" id="btnClear">清空</button>
+        </div>
+      </div>
+      <div class="bd">
+        <div id="rawPreviewArea" class="tableWrap" style="display:none;">
+          <table id="rawPreviewTable">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <details id="rawTextDetails">
+          <summary class="hint">原始文本（可编辑，支持粘贴 TSV/CSV）</summary>
+          <textarea id="rawTextarea" placeholder="..."></textarea>
+        </details>
+
+        <div class="row">
+          <div class="hint">
+            录入方式：点击“上传 CSV/TSV”选择本地文件（内容会自动填入并解析）。
+            解析规则：必须包含 <span style="font-family:var(--mono);">subject_id</span> 和你在“数据设定”里填写的分组变量列名（如 <span style="font-family:var(--mono);">T</span>），其余列默认均为变量。
+          </div>
+        </div>
+        <div id="parseStatus" class="status">尚未解析。</div>
+      </div>
+    </section>
+
+    <!-- 数据设定：紧跟原始数据面板 -->
+    <section class="panel p-settings">
+      <div class="hd">
+        <div class="label">数据设定</div>
+        <div class="actions">
+          <button class="btn" id="btnVarsAll">全选变量</button>
+          <button class="btn" id="btnVarsNone">全部取消</button>
+        </div>
+      </div>
+      <div class="bd">
+        <div id="settingsWrap">
+          <div class="hint">
+            说明：这里控制“哪些变量参与可视化显示”。图注与折线图只显示被选中的变量。
+          </div>
+
+          <div class="fieldRow">
+            <label for="groupVarInput">分组变量名（时间列）</label>
+            <input id="groupVarInput" type="text" value="T" placeholder="例如：T / t_id / time" />
+          </div>
+
+          <div id="groupVarWarn" class="warn" style="display:none;"></div>
+
+          <div id="varPickToolbar">
+            <div class="hint">变量列表（来自 CSV 表头）</div>
+            <div class="pill" id="pillVars">0 / 0 已选</div>
+          </div>
+
+          <div id="varPickList"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 选择数据：紧跟数据设定 -->
+    <section class="panel p-sel">
+      <div class="hd">
+        <div class="label">选择数据</div>
+        <div class="actions">
+          <button class="btn" id="btnClearHistory">清空记录</button>
+        </div>
+      </div>
+      <div class="bd">
+        <div class="hint" style="margin-bottom:10px;">
+          这里展示当前选择的变量，以及拖动均值点的历史记录（原始值 → 修改值）。
+        </div>
+        <div id="selectionBox"></div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Center: visualization -->
+  <section class="panel p-viz">
+    <div class="hd">
+      <div class="label">重复测量均值显示</div>
+      <div class="actions">
+        <span class="pill" id="pillInfo">未载入数据</span>
+      </div>
+    </div>
+    <div class="bd">
+      <div id="chartWrap">
+        <div class="overlayNote" id="overlayNote">
+          交互：单击折线选中（高亮），按住 Shift 可多选；拖动折线上的圆点可调整该变量在该时间点的“均值”（仅纵向拖动），图会即时更新；Reset 恢复原始均值并清空选择与历史。
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Right: legend -->
+  <section class="panel p-legend">
+    <div class="hd">
+      <div class="label">图注信息</div>
+      <div class="actions">
+        <button class="btn" id="btnSelectAll">全选</button>
+        <button class="btn" id="btnSelectNone">全不选</button>
+      </div>
+    </div>
+    <div class="bd">
+      <div class="hint" style="margin-bottom:10px;">
+        这里列出每个变量对应的颜色。点击可同步选择对应折线（Shift 可多选）。
+      </div>
+      <div id="legendList"></div>
+    </div>
+  </section>
+
+  <!-- Bottom: stacked panels spanning center+right -->
+  <div class="bottomStack">
+
+    <section class="panel p-groups">
+      <div class="hd">
+        <div class="label">分组设置</div>
+        <div class="actions">
+          <button class="btn primary" id="btnAddGroup">新增分组</button>
+        </div>
+      </div>
+      <div class="bd">
+        <div class="hint" style="margin-bottom:10px;">
+          使用场景：你在其他软件（如 SPSS）对变量做因子分析后，得到了若干因子对应的变量集合。
+          你可以在此把变量名塞进不同组里，点击“应用该组”即可在图中一键高亮该组变量，快速检查不同因子变量的时间变化模式。
+        </div>
+        <div id="groupsWrap"></div>
+      </div>
+    </section>
+
+    <section class="panel p-desc">
+      <div class="hd">
+        <div class="label">数据描述</div>
+        <div class="actions">
+          <span class="pill" id="descPill">等待数据</span>
+        </div>
+      </div>
+      <div class="bd">
+        <div class="hint" style="margin-bottom:10px;">
+          每个变量一行，显示各时间点均值、总体均值与总体方差（将所有被试、所有时间点合并后计算）。
+        </div>
+        <div class="tableWrap">
+          <table id="descTable">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</div>
+  </div>
+
+  <script>
+    // ----------------------------
+    // 示例数据（与占位符一致）
+    // ----------------------------
+    const EXAMPLE_TSV = `subject_id\taffect_aware1\tbody_valen2\texpr_interest3\texpr_detail4\tbodyinside_aware5\taffect_valen6\tpresent_explor7\tbody_aware8\tbody_move9\tpresent_aware10\tmind_valen11\taffect_change12\tbody_environment13\tbody_change14\tfocus_clear15\tfocus_presnet16\tmind_change17\tbody_prensent18\tminde_aware19\tmind_interest20\tbody_valen21\tT
+6\t4\t4\t3\t3\t4\t4\t2\t3\t5\t4\t4\t4\t4\t5\t4\t4\t5\t4\t3\t5\t5\t1
+7\t4\t5\t2\t2\t2\t2\t3\t2\t4\t2\t4\t4\t4\t4\t4\t3\t2\t2\t2\t3\t4\t1
+8\t2\t2\t2\t2\t2\t3\t3\t2\t1\t4\t2\t3\t2\t2\t4\t4\t4\t4\t4\t3\t3\t1
+6\t3\t4\t2\t3\t3\t4\t3\t3\t4\t3\t4\t4\t3\t4\t4\t4\t4\t4\t4\t4\t4\t2
+7\t4\t4\t2\t2\t2\t3\t2\t2\t4\t2\t4\t3\t3\t4\t4\t3\t2\t2\t2\t3\t4\t2
+8\t2\t3\t2\t2\t2\t3\t3\t2\t2\t3\t2\t3\t2\t3\t4\t4\t4\t4\t4\t3\t3\t2
+6\t4\t5\t4\t4\t4\t5\t4\t4\t5\t4\t5\t5\t4\t5\t5\t5\t5\t5\t5\t4\t5\t3
+7\t4\t5\t3\t3\t3\t4\t3\t3\t4\t3\t4\t4\t3\t4\t4\t4\t4\t4\t4\t3\t4\t3
+8\t3\t4\t3\t3\t3\t4\t3\t3\t3\t3\t3\t4\t3\t3\t4\t4\t4\t4\t4\t3\t3\t3`;
+
+    // ----------------------------
+    // 状态
+    // ----------------------------
+    const state = {
+      rawRows: [],
+      headers: [],
+      timeKey: null,
+      subjectKey: null,
+      vars: [],
+      vizVars: new Set(),
+      times: [],
+      means: new Map(),     // key: var|t -> mean
+      means0: new Map(),    // 原始 mean
+      valuesByVar: new Map(), // var -> [{t, v}... all points across subj/time]
+      selected: new Set(),
+      overrides: new Map(), // var|t -> overridden mean
+      history: [],
+      groups: [],
+      colors: new Map(),
+    };
+
+    const el = {
+      ta: document.getElementById('rawTextarea'),
+      status: document.getElementById('parseStatus'),
+      pill: document.getElementById('pillInfo'),
+      legend: document.getElementById('legendList'),
+      sel: document.getElementById('selectionBox'),
+      overlay: document.getElementById('overlayNote'),
+      descPill: document.getElementById('descPill'),
+      descTable: document.getElementById('descTable'),
+      groupsWrap: document.getElementById('groupsWrap'),
+      chartWrap: document.getElementById('chartWrap'),
+      rawPreviewArea: document.getElementById('rawPreviewArea'),
+      rawPreviewTable: document.getElementById('rawPreviewTable'),
+      rawTextDetails: document.getElementById('rawTextDetails'),
+
+      // New settings panel
+      groupVarInput: document.getElementById('groupVarInput'),
+      groupVarWarn: document.getElementById('groupVarWarn'),
+      varPickList: document.getElementById('varPickList'),
+      pillVars: document.getElementById('pillVars'),
+
+    };
+    function getVizVarsList() {
+      const arr = Array.from(state.vizVars || []);
+      return arr.length ? arr : (state.vars || []);
+    }
+    function setGroupVarWarn(msg) {
+      if (!msg) {
+        el.groupVarWarn.style.display = 'none';
+        el.groupVarWarn.textContent = '';
+        return;
+      }
+      el.groupVarWarn.style.display = 'block';
+      el.groupVarWarn.textContent = msg;
+    }
+    function setVizVarsAll() {
+      state.vizVars = new Set(state.vars);
+      // 如果之前选中过不可见变量，清理选择
+      state.selected = new Set(Array.from(state.selected).filter(v => state.vizVars.has(v)));
+      renderVarPicker();
+      renderLegend();
+      renderSelectionPanel();
+      renderChart();
+    }
+
+    function setVizVarsNone() {
+      state.vizVars = new Set();
+      state.selected.clear();
+      renderVarPicker();
+      renderLegend();
+      renderSelectionPanel();
+      renderChart();
+    }
+
+    function toggleVizVar(v) {
+      if (state.vizVars.has(v)) {
+        state.vizVars.delete(v);
+        state.selected.delete(v);
+      } else {
+        // 如果当前为空，先初始化为“仅添加这个”逻辑
+        if (!state.vizVars || !(state.vizVars instanceof Set)) state.vizVars = new Set();
+        state.vizVars.add(v);
+      }
+      renderVarPicker();
+      renderLegend();
+      renderSelectionPanel();
+      renderChart();
+    }
+
+    function renderVarPicker() {
+      if (!el.varPickList) return;
+      el.varPickList.innerHTML = '';
+
+      if (!state.vars.length) {
+        el.varPickList.innerHTML = `<div class="hint" style="padding:10px;">尚未载入数据。</div>`;
+        if (el.pillVars) el.pillVars.textContent = `0 / 0 已选`;
+        return;
+      }
+
+      // 初始化：首次载入时默认全选
+      if (!state.vizVars || !(state.vizVars instanceof Set) || state.vizVars.size === 0) {
+        // 注意：这里不强行全选，允许用户“全部取消”。
+        // 但在 hydrateFromParsed 时会显式全选一次。
+      }
+
+      const selectedN = state.vizVars.size;
+      if (el.pillVars) el.pillVars.textContent = `${selectedN} / ${state.vars.length} 已选`;
+
+      const frag = document.createDocumentFragment();
+      for (const v of state.vars) {
+        const row = document.createElement('div');
+        row.className = 'varPickRow';
+
+        const name = document.createElement('div');
+        name.className = 'varPickName';
+        name.textContent = v;
+        name.title = v;
+
+        const btn = document.createElement('button');
+        const on = state.vizVars.has(v);
+        btn.className = `miniBtn ${on ? 'on' : 'off'}`;
+        btn.textContent = on ? '取消显示' : '加入显示';
+        btn.addEventListener('click', () => toggleVizVar(v));
+
+        row.appendChild(name);
+        row.appendChild(btn);
+        frag.appendChild(row);
+      }
+      el.varPickList.appendChild(frag);
+    }
+
+
+    // ----------------------------
+    // 工具函数
+    // ----------------------------
+    function keyVT(v, t) { return `${v}|||${t}`; }
+
+    function fmt(x, digits = 3) {
+      if (x == null || Number.isNaN(x)) return '';
+      const ax = Math.abs(x);
+      if (ax !== 0 && (ax >= 1000 || ax < 0.001)) return x.toExponential(3);
+      return (+x).toFixed(digits);
+    }
+
+    function safeTrimLines(s) {
+      return (s || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .split('\n')
+        .map(line => line.trimEnd())
+        .filter((line, i, arr) => !(line.trim() === '' && i === arr.length - 1))
+        .join('\n');
+    }
+
+    function detectDelimiter(headerLine) {
+      if (headerLine.includes('\t')) return '\t';
+      if (headerLine.includes(',')) return ',';
+      // 最后兜底：多个空格视作分隔
+      return null;
+    }
+
+    function splitRow(line, delim) {
+      if (delim === '\t') return line.split('\t');
+      if (delim === ',') return line.split(',');
+      // 兜底：2+空白
+      return line.trim().split(/\s{2,}/);
+    }
+
+    function readFileAsText(file) {
+      return new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result ?? ''));
+        fr.onerror = () => reject(fr.error || new Error('File read error'));
+        fr.readAsText(file);
+      });
+    }
+
+    function setStatus(text, kind = 'neutral') {
+      el.status.classList.remove('ok', 'err');
+      if (kind === 'ok') el.status.classList.add('ok');
+      if (kind === 'err') el.status.classList.add('err');
+      el.status.textContent = text;
+    }
+
+    function computeMean(arr) {
+      let s = 0;
+      let n = 0;
+      for (const x of arr) {
+        if (x == null || Number.isNaN(x)) continue;
+        s += x;
+        n += 1;
+      }
+      return n ? s / n : NaN;
+    }
+
+    function computeVar(arr) {
+      // 无偏估计（n-1），但 n<2 时返回 NaN
+      const xs = arr.filter(v => v != null && !Number.isNaN(v));
+      const n = xs.length;
+      if (n < 2) return NaN;
+      const m = computeMean(xs);
+      let ss = 0;
+      for (const x of xs) ss += (x - m) * (x - m);
+      return ss / (n - 1);
+    }
+
+    function makeColorScale(names) {
+      // 用连续色带保证变量很多时也不至于全撞色
+      const n = Math.max(1, names.length);
+      const f = d3.scaleSequential(d3.interpolateRainbow).domain([0, n - 1]);
+      const map = new Map();
+      names.forEach((nm, i) => map.set(nm, f(i)));
+      return map;
+    }
+
+    // ----------------------------
+    // 数据解析
+    // ----------------------------
+    function parseRaw(text, opts = {}) {
+      const timeVarName = String(opts.timeVarName || '').trim();
+      const cleaned = safeTrimLines(text);
+      if (!cleaned.trim()) {
+        return { ok: false, error: '数据为空。请粘贴 TSV/CSV 数据。' };
+      }
+
+      const lines = cleaned.split('\n').filter(l => l.trim() !== '');
+      const headerLine = lines[0];
+      const delim = detectDelimiter(headerLine);
+      const headers = splitRow(headerLine, delim).map(h => h.trim());
+
+      if (headers.length < 3) {
+        return { ok: false, error: '列数过少。至少需要 subject_id、若干变量列、以及时间列（T/t/t_id）。' };
+      }
+
+      // 识别关键列
+      const lower = headers.map(h => h.toLowerCase());
+      const subjectIdx = lower.indexOf('subject_id') >= 0 ? lower.indexOf('subject_id') : lower.indexOf('sid');
+      
+      if (!timeVarName) {
+        return { ok: false, error: '未指定分组变量名（时间列）。请在“数据设定”面板输入时间列名，例如：T。' };
+      }
+
+      const timeIdx = lower.indexOf(timeVarName.toLowerCase());
+
+      if (timeIdx < 0) {
+        return { ok: false, error: `未找到分组变量列："${timeVarName}"。请确认该列名存在于表头中。` };
+      }
+
+      if (subjectIdx < 0) {
+        return { ok: false, error: '未找到 subject_id 列。请确保第一行表头包含 subject_id。' };
+      }
+
+      if (timeIdx === subjectIdx) {
+        return { ok: false, error: '时间列与 subject_id 列冲突。请检查表头。' };
+      }
+
+      const vars = headers.filter((h, i) => i !== subjectIdx && i !== timeIdx);
+      if (!vars.length) {
+        return { ok: false, error: '未识别到变量列（除 subject_id 与时间列之外的列）。' };
+      }
+
+      const rows = [];
+      const badLines = [];
+
+      for (let li = 1; li < lines.length; li++) {
+        const parts = splitRow(lines[li], delim).map(x => x.trim());
+        if (parts.length !== headers.length) {
+          badLines.push({ lineNo: li + 1, reason: `列数不一致：期望 ${headers.length}，实际 ${parts.length}` });
+          continue;
+        }
+        const r = {};
+        headers.forEach((h, i) => {
+          r[h] = parts[i];
+        });
+        rows.push(r);
+      }
+
+      if (!rows.length) {
+        return { ok: false, error: '没有任何可用数据行。请检查是否存在空行或分隔符不一致。' };
+      }
+
+      // 数值化
+      const timeKey = headers[timeIdx];
+      const subjectKey = headers[subjectIdx];
+      const times = new Set();
+
+      for (const r of rows) {
+        // 时间
+        const tRaw = r[timeKey];
+        const tNum = Number(tRaw);
+        if (Number.isNaN(tNum)) {
+          return { ok: false, error: `时间列 ${timeKey} 存在非数值："${tRaw}"。请用 1/2/3 这类数值表示时间点。` };
+        }
+        r.__t = tNum;
+        times.add(tNum);
+
+        // subject
+        r.__sid = String(r[subjectKey]);
+
+        // vars
+        for (const v of vars) {
+          const vv = Number(r[v]);
+          r[v] = Number.isNaN(vv) ? NaN : vv;
+        }
+      }
+
+      const timesSorted = Array.from(times).sort((a, b) => a - b);
+      const metaWarnings = [];
+      if (timesSorted.length < 2) {
+        metaWarnings.push(`警告：分组变量 ${timeKey} 只有 ${timesSorted.length} 个取值（需要 >= 2 才能画折线）。当前可视化将只显示点，不显示线。`);
+      }
+
+      return {
+        ok: true,
+        rows,
+        headers,
+        subjectKey,
+        timeKey,
+        vars,
+        times: timesSorted,
+        warnings: badLines,
+        metaWarnings,
+      };
+    }
+
+    function summarizeData(rows, vars, times) {
+      // valuesByVar: var -> all raw values across all rows/timepoints
+      const valuesByVar = new Map();
+      vars.forEach(v => valuesByVar.set(v, []));
+
+      // mean per var per time
+      const means = new Map();
+      for (const v of vars) {
+        for (const t of times) {
+          const xs = rows.filter(r => r.__t === t).map(r => r[v]);
+          const m = computeMean(xs);
+          means.set(keyVT(v, t), m);
+        }
+      }
+
+      // collect all values per var for variance
+      for (const r of rows) {
+        for (const v of vars) {
+          valuesByVar.get(v).push(r[v]);
+        }
+      }
+
+      return { means, valuesByVar };
+    }
+
+    // ----------------------------
+    // 左侧原始数据表格预览（默认前 100 行）
+    // ----------------------------
+    function showRawPreview() {
+        el.rawPreviewArea.style.display = 'block';
+        // 默认不展开文本区域（避免占空间），但仍保留可编辑入口
+        el.rawTextDetails.open = false;
+    }
+
+    function hideRawPreview() {
+        el.rawPreviewArea.style.display = 'none';
+    }
+
+    function renderRawPreview(headers, rows) {
+        const thead = el.rawPreviewTable.querySelector('thead');
+        const tbody = el.rawPreviewTable.querySelector('tbody');
+        thead.innerHTML = '';
+        tbody.innerHTML = '';
+
+        if (!headers || !headers.length || !rows || !rows.length) return;
+
+        // 表头
+        const trh = document.createElement('tr');
+        for (const h of headers) {
+            const th = document.createElement('th');
+            th.textContent = h;
+            trh.appendChild(th);
+        }
+        thead.appendChild(trh);
+
+        // 前 100 行
+        const n = Math.min(100, rows.length);
+        for (let i = 0; i < n; i++) {
+            const r = rows[i];
+            const tr = document.createElement('tr');
+            for (const h of headers) {
+            const td = document.createElement('td');
+            const val = r[h];
+            if (val == null) td.textContent = '';
+            else if (typeof val === 'number') td.textContent = Number.isNaN(val) ? '' : String(val);
+            else td.textContent = String(val);
+            tr.appendChild(td);
+            }
+            tbody.appendChild(tr);
+        }
+    }
+
+    // ----------------------------
+    // 选择 / 历史
+    // ----------------------------
+    function clearSelection() {
+      state.selected.clear();
+      renderLegend();
+      renderSelectionPanel();
+      renderChart();
+    }
+
+    function setSelection(vars, additive) {
+      if (!additive) state.selected.clear();
+      vars.forEach(v => state.selected.add(v));
+      renderLegend();
+      renderSelectionPanel();
+      renderChart();
+    }
+
+    function toggleSelection(v, additive) {
+      if (!additive) {
+        if (state.selected.size === 1 && state.selected.has(v)) {
+          // 单独一个时，再点一次就取消选择
+          state.selected.clear();
+        } else {
+          state.selected.clear();
+          state.selected.add(v);
+        }
+      } else {
+        if (state.selected.has(v)) state.selected.delete(v);
+        else state.selected.add(v);
+      }
+      renderLegend();
+      renderSelectionPanel();
+      renderChart();
+    }
+
+    function pushHistory(item) {
+      state.history.unshift(item);
+      renderSelectionPanel();
+    }
+
+    // ----------------------------
+    // 图注渲染
+    // ----------------------------
+    function renderLegend() {
+      el.legend.innerHTML = '';
+      if (!getVizVarsList().length) {
+        el.legend.innerHTML = `<div class="hint">尚无变量可显示。</div>`;
+        return;
+      }
+
+      const frag = document.createDocumentFragment();
+      const vizVars = getVizVarsList();
+      for (const v of vizVars) {
+        const div = document.createElement('div');
+        div.className = 'legendItem' + (state.selected.has(v) ? ' selected' : '');
+        div.title = `点击选择：${v}`;
+
+        const left = document.createElement('div');
+        left.className = 'legendLeft';
+
+        const sw = document.createElement('div');
+        sw.className = 'swatch';
+        sw.style.background = state.colors.get(v) || '#999';
+
+        const nm = document.createElement('div');
+        nm.className = 'legendName';
+        nm.textContent = v;
+
+        left.appendChild(sw);
+        left.appendChild(nm);
+
+        const p = document.createElement('div');
+        p.className = 'pill';
+        p.textContent = state.selected.has(v) ? 'selected' : '';
+
+        div.appendChild(left);
+        div.appendChild(p);
+
+        div.addEventListener('click', (ev) => {
+          toggleSelection(v, ev.shiftKey);
+        });
+
+        frag.appendChild(div);
+      }
+      el.legend.appendChild(frag);
+    }
+
+    // ----------------------------
+    // Selection panel 渲染
+    // ----------------------------
+    function renderSelectionPanel() {
+      el.sel.innerHTML = '';
+
+      const selectedVars = Array.from(state.selected);
+      if (!selectedVars.length && !state.history.length) {
+        el.sel.innerHTML = `<div class="hint">尚未选择任何折线，也没有拖动历史记录。</div>`;
+        return;
+      }
+
+      if (selectedVars.length) {
+        const card = document.createElement('div');
+        card.className = 'selItem';
+        card.innerHTML = `
+          <div class="k">当前选择的变量</div>
+          <div class="v">${selectedVars.map(v => `• ${v}`).join('\n')}</div>
+        `;
+        el.sel.appendChild(card);
+      }
+
+      if (state.history.length) {
+        for (const h of state.history.slice(0, 30)) {
+          const card = document.createElement('div');
+          card.className = 'selItem';
+          card.innerHTML = `
+            <div class="k">拖动记录</div>
+            <div class="v">var=${h.var}\nT=${h.t}\n原始=${fmt(h.from)}\n修改=${fmt(h.to)}\n时间=${h.at}</div>
+          `;
+          el.sel.appendChild(card);
+        }
+      }
+    }
+
+    // ----------------------------
+    // 数据描述表
+    // ----------------------------
+    function renderDescTable() {
+      const thead = el.descTable.querySelector('thead');
+      const tbody = el.descTable.querySelector('tbody');
+      thead.innerHTML = '';
+      tbody.innerHTML = '';
+
+      if (!state.vars.length || !state.times.length) {
+        el.descPill.textContent = '等待数据';
+        return;
+      }
+
+      const times = state.times.slice();
+
+      // 表头
+      const trh = document.createElement('tr');
+      const thVar = document.createElement('th');
+      thVar.textContent = 'var';
+      trh.appendChild(thVar);
+
+      for (const t of times) {
+        const th = document.createElement('th');
+        th.textContent = `mean_T${t}`;
+        trh.appendChild(th);
+      }
+
+      const thAll = document.createElement('th');
+      thAll.textContent = 'mean_all';
+      trh.appendChild(thAll);
+
+      const thVarAll = document.createElement('th');
+      thVarAll.textContent = 'var_all';
+      trh.appendChild(thVarAll);
+
+      thead.appendChild(trh);
+
+      // 表体
+      for (const v of state.vars) {
+        const tr = document.createElement('tr');
+        tr.addEventListener('click', (ev) => {
+          toggleSelection(v, ev.shiftKey);
+        });
+
+        const tdV = document.createElement('td');
+        tdV.className = 'varCell';
+        tdV.textContent = v;
+        tr.appendChild(tdV);
+
+        const allVals = state.valuesByVar.get(v) || [];
+
+        // 时间点均值（注意：显示的是“当前均值”，即包含 overrides）
+        for (const t of times) {
+          const td = document.createElement('td');
+          const k = keyVT(v, t);
+          const cur = state.overrides.has(k) ? state.overrides.get(k) : state.means0.get(k);
+          td.textContent = fmt(cur);
+          tr.appendChild(td);
+        }
+
+        // 总均值：将当前时间点均值简单平均（不加权），这是最符合“均值趋势图”的逻辑
+        const curMeans = times.map(t => {
+          const k = keyVT(v, t);
+          return state.overrides.has(k) ? state.overrides.get(k) : state.means0.get(k);
+        });
+        const meanAll = computeMean(curMeans);
+
+        const tdMeanAll = document.createElement('td');
+        tdMeanAll.textContent = fmt(meanAll);
+        tr.appendChild(tdMeanAll);
+
+        // 方差：基于原始数据（更符合描述统计），拖动均值不改变原始观测方差
+        const varAll = computeVar(allVals);
+        const tdVarAll = document.createElement('td');
+        tdVarAll.textContent = fmt(varAll);
+        tr.appendChild(tdVarAll);
+
+        tbody.appendChild(tr);
+      }
+
+      el.descPill.textContent = `${state.vars.length} vars · ${state.times.length} timepoints`;
+    }
+
+    // ----------------------------
+    // 分组面板
+    // ----------------------------
+    function normalizeVarName(s) {
+      return (s || '').trim();
+    }
+
+    function groupCardTemplate(g, idx) {
+      const card = document.createElement('div');
+      card.className = 'groupCard';
+
+      const top = document.createElement('div');
+      top.className = 'groupTop';
+
+      const nameWrap = document.createElement('div');
+      nameWrap.className = 'name';
+
+      const inp = document.createElement('input');
+      inp.value = g.name;
+      inp.placeholder = '组名（例如：情绪维度 / 身体觉察维度）';
+      inp.addEventListener('input', () => {
+        g.name = inp.value;
+      });
+
+      const applyBtn = document.createElement('button');
+      applyBtn.className = 'btn primary';
+      applyBtn.textContent = '应用该组';
+      applyBtn.title = '在折线图中高亮本组变量（Shift 多选逻辑由系统处理）';
+      applyBtn.addEventListener('click', () => {
+        const vars = g.vars.filter(v => state.vars.includes(v));
+        setSelection(vars, false);
+      });
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn danger';
+      delBtn.textContent = '删除';
+      delBtn.addEventListener('click', () => {
+        state.groups.splice(idx, 1);
+        renderGroups();
+      });
+
+      nameWrap.appendChild(inp);
+      top.appendChild(nameWrap);
+
+      const actions = document.createElement('div');
+      actions.style.display = 'flex';
+      actions.style.gap = '8px';
+      actions.appendChild(applyBtn);
+      actions.appendChild(delBtn);
+      top.appendChild(actions);
+
+      const varsGrid = document.createElement('div');
+      varsGrid.className = 'varsGrid';
+
+      for (const v of g.vars) {
+        const chip = document.createElement('div');
+        chip.className = 'varChip';
+        const span = document.createElement('span');
+        span.textContent = v;
+        span.title = v;
+
+        const x = document.createElement('div');
+        x.className = 'chipX';
+        x.textContent = '×';
+        x.title = '从该组移除';
+        x.addEventListener('click', () => {
+          g.vars = g.vars.filter(x => x !== v);
+          renderGroups();
+        });
+
+        chip.appendChild(span);
+        chip.appendChild(x);
+        varsGrid.appendChild(chip);
+      }
+
+      const addRow = document.createElement('div');
+      addRow.className = 'addRow';
+
+      const addInp = document.createElement('input');
+      addInp.placeholder = '输入变量名并回车，或点击 + 添加（支持逗号分隔）';
+
+      const addBtn = document.createElement('button');
+      addBtn.className = 'btn';
+      addBtn.textContent = '+ 添加数据';
+
+      function doAdd() {
+        const raw = addInp.value.trim();
+        if (!raw) return;
+        const parts = raw.split(',').map(normalizeVarName).filter(Boolean);
+        for (const p of parts) {
+          if (!g.vars.includes(p)) g.vars.push(p);
+        }
+        addInp.value = '';
+        renderGroups();
+      }
+
+      addInp.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          doAdd();
+        }
+      });
+      addBtn.addEventListener('click', doAdd);
+
+      addRow.appendChild(addInp);
+      addRow.appendChild(addBtn);
+
+      const hint = document.createElement('div');
+      hint.className = 'groupHint';
+      hint.innerHTML = `
+        提示：变量名必须与数据表头一致。若输入了不存在的变量，系统不会报错，只是在“应用该组”时自动忽略。
+      `;
+
+      card.appendChild(top);
+      card.appendChild(varsGrid);
+      card.appendChild(addRow);
+      card.appendChild(hint);
+
+      return card;
+    }
+
+    function renderGroups() {
+      el.groupsWrap.innerHTML = '';
+      if (!state.groups.length) {
+        el.groupsWrap.innerHTML = `<div class="hint">尚未建立分组。点击右上角“新增分组”。</div>`;
+        return;
+      }
+      const frag = document.createDocumentFragment();
+      state.groups.forEach((g, idx) => frag.appendChild(groupCardTemplate(g, idx)));
+      el.groupsWrap.appendChild(frag);
+    }
+
+    // ----------------------------
+    // Chart 渲染（SVG + D3）
+    // ----------------------------
+    let svg = null;
+    let gMain = null;
+
+    function initChart() {
+      el.chartWrap.querySelector('svg')?.remove();
+      const w = el.chartWrap.clientWidth;
+      const h = el.chartWrap.clientHeight;
+
+      svg = d3.select(el.chartWrap)
+        .append('svg')
+        .attr('width', w)
+        .attr('height', h)
+        .style('display', 'block');
+
+      const margin = { top: 18, right: 18, bottom: 46, left: 56 };
+      gMain = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+
+      // 保存尺寸
+      state._chart = { w, h, margin, innerW: w - margin.left - margin.right, innerH: h - margin.top - margin.bottom };
+    }
+
+    function currentMean(v, t) {
+      const k = keyVT(v, t);
+      if (state.overrides.has(k)) return state.overrides.get(k);
+      return state.means0.get(k);
+    }
+
+    function renderChart() {
+      if (!svg || !gMain) initChart();
+      if (!getVizVarsList().length || !state.times.length) {
+        gMain.selectAll('*').remove();
+        return;
+      }
+
+      const { innerW, innerH, margin } = state._chart;
+
+      // 准备 series
+      const vizVars = getVizVarsList();
+      const series = vizVars.map(v => ({
+        var: v,
+        values: state.times.map(t => ({ t, v: currentMean(v, t) }))
+      }));
+
+      // Y 范围：用所有变量所有时间点的“当前均值”确定
+      const allY = series.flatMap(s => s.values.map(d => d.v)).filter(x => x != null && !Number.isNaN(x));
+      const yMin = d3.min(allY);
+      const yMax = d3.max(allY);
+      const pad = (yMax - yMin) === 0 ? 1 : (yMax - yMin) * 0.08;
+
+      const x = d3.scalePoint()
+        .domain(state.times)
+        .range([0, innerW])
+        .padding(0.35);
+
+      const y = d3.scaleLinear()
+        .domain([yMin - pad, yMax + pad])
+        .range([innerH, 0])
+        .nice();
+
+      const xAxis = d3.axisBottom(x);
+      const yAxis = d3.axisLeft(y).ticks(6);
+
+      const line = d3.line()
+        .x(d => x(d.t))
+        .y(d => y(d.v));
+
+      // 清空并重画（数据量不大，简单粗暴更稳）
+      gMain.selectAll('*').remove();
+
+      // 网格
+      gMain.append('g')
+        .attr('opacity', 0.18)
+        .call(d3.axisLeft(y).ticks(6).tickSize(-innerW).tickFormat(''))
+        .selectAll('line')
+        .attr('stroke', 'white');
+
+      // 坐标轴
+      gMain.append('g')
+        .attr('transform', `translate(0,${innerH})`)
+        .call(xAxis)
+        .call(g => g.selectAll('text').attr('fill', 'rgba(233,238,246,0.85)').attr('font-size', 12))
+        .call(g => g.selectAll('path, line').attr('stroke', 'rgba(255,255,255,0.22)'));
+
+      gMain.append('g')
+        .call(yAxis)
+        .call(g => g.selectAll('text').attr('fill', 'rgba(233,238,246,0.85)').attr('font-size', 12))
+        .call(g => g.selectAll('path, line').attr('stroke', 'rgba(255,255,255,0.22)'));
+
+      // 轴标签
+      gMain.append('text')
+        .attr('x', innerW / 2)
+        .attr('y', innerH + 38)
+        .attr('text-anchor', 'middle')
+        .attr('fill', 'rgba(233,238,246,0.88)')
+        .attr('font-size', 12)
+        .text('t（重复测量时间点）');
+
+      gMain.append('text')
+        .attr('x', -innerH / 2)
+        .attr('y', -42)
+        .attr('transform', 'rotate(-90)')
+        .attr('text-anchor', 'middle')
+        .attr('fill', 'rgba(233,238,246,0.88)')
+        .attr('font-size', 12)
+        .text('变量均值');
+
+      // Mean line (across ALL vars; selection only changes highlighting, not the mean definition)
+      const meanSeries = state.times.map(t => {
+        const xs = state.vars.map(v => currentMean(v, t));
+        return { t, v: computeMean(xs) };
+      }).filter(d => d.v != null && !Number.isNaN(d.v));
+
+      if (state.times.length >= 2 && meanSeries.length >= 2) {
+        // Draw behind variable lines to reduce occlusion
+        gMain.append('path')
+          .datum(meanSeries)
+          .attr('id', 'meanLinePath')
+          .attr('d', line)
+          .attr('fill', 'none')
+          .attr('stroke', 'rgba(233,238,246,0.70)')
+          .attr('stroke-width', 2.2)
+          .attr('stroke-dasharray', '6,6')
+          .attr('opacity', 0.85)
+          .style('pointer-events', 'none');
+      } else {
+        // 单一时间点：只画均值点（可选）
+        if (meanSeries.length === 1) {
+          gMain.append('circle')
+            .attr('cx', x(meanSeries[0].t))
+            .attr('cy', y(meanSeries[0].v))
+            .attr('r', 4.2)
+            .attr('fill', 'rgba(233,238,246,0.75)')
+            .attr('stroke', 'rgba(255,255,255,0.55)')
+            .attr('stroke-width', 0.9)
+            .style('pointer-events', 'none');
+        }
+      }
+
+      // Lines
+      const linesG = gMain.append('g').attr('class', 'lines');
+
+      const isAnySelected = state.selected.size > 0;
+
+      if (state.times.length >= 2) {
+        linesG.selectAll('path')
+          .data(series, d => d.var)
+          .enter()
+          .append('path')
+          .attr('class', 'varLine')
+          .attr('data-var', d => d.var)
+          .attr('d', d => line(d.values))
+          .attr('fill', 'none')
+          .attr('stroke', d => state.colors.get(d.var) || '#999')
+          .attr('stroke-width', d => state.selected.has(d.var) ? 2.6 : 1.2)
+          .attr('opacity', d => {
+            if (!isAnySelected) return 0.88;
+            return state.selected.has(d.var) ? 0.98 : 0.18;
+          })
+          .style('cursor', 'pointer')
+          .on('click', (ev, d) => {
+            toggleSelection(d.var, ev.shiftKey);
+          });
+      }
+
+      // Points (for dragging)
+      const pointsG = gMain.append('g').attr('class', 'points');
+
+      const points = pointsG.selectAll('circle')
+        .data(series.flatMap(s => s.values.map(p => ({ var: s.var, t: p.t, v: p.v }))), d => `${d.var}|||${d.t}`)
+        .enter()
+        .append('circle')
+        .attr('class', 'meanPoint')
+        .attr('data-var', d => d.var)
+        .attr('data-t', d => d.t)
+        .attr('cx', d => x(d.t))
+        .attr('cy', d => y(d.v))
+        .attr('r', d => state.selected.has(d.var) ? 4.6 : 3.2)
+        .attr('fill', d => state.colors.get(d.var) || '#999')
+        .attr('stroke', 'rgba(255,255,255,0.55)')
+        .attr('stroke-width', 0.8)
+        .attr('opacity', d => {
+          if (!isAnySelected) return 0.85;
+          return state.selected.has(d.var) ? 0.98 : 0.10;
+        })
+        .style('cursor', 'ns-resize');
+
+      // --- Remove any previous helpers for smooth dragging (no full re-render during drag) ---
+      // (delete block if exists)
+      // --- Helpers for smooth dragging (no full re-render during drag) ---
+      const cssEscape = (window.CSS && CSS.escape) ? CSS.escape : (s) => String(s).replace(/["\\]/g, '\\$&');
+
+      function applySelectionStylesInPlace() {
+        const isSel = state.selected && state.selected.size > 0;
+
+        gMain.selectAll('path.varLine')
+          .attr('stroke-width', d => state.selected.has(d.var) ? 2.6 : 1.2)
+          .attr('opacity', d => {
+            if (!isSel) return 0.88;
+            return state.selected.has(d.var) ? 0.98 : 0.18;
+          });
+
+        gMain.selectAll('circle.meanPoint')
+          .attr('r', d => state.selected.has(d.var) ? 4.6 : 3.2)
+          .attr('opacity', d => {
+            if (!isSel) return 0.85;
+            return state.selected.has(d.var) ? 0.98 : 0.10;
+          });
+      }
+
+      function updateVarLineInPlace(varName) {
+        const sel = gMain.select(`path.varLine[data-var="${cssEscape(varName)}"]`);
+        if (sel.empty()) return;
+        const pts = state.times.map(t => ({ t, v: currentMean(varName, t) }));
+        sel.attr('d', line(pts));
+      }
+
+      function updateMeanLineInPlace() {
+        const meanPts = state.times.map(t => {
+          const xs = state.vars.map(v => currentMean(v, t));
+          return { t, v: computeMean(xs) };
+        }).filter(d => d.v != null && !Number.isNaN(d.v));
+
+        const mp = gMain.select('#meanLinePath');
+        if (!mp.empty()) {
+          mp.attr('d', line(meanPts));
+        }
+      }
+
+      function setMeanLineHighlight(isOn) {
+        const mp = gMain.select('#meanLinePath');
+        if (mp.empty()) return;
+
+        if (isOn) {
+          // 拖动时让均值线更醒目，便于观察“单点变化→均值变化”的影响
+          mp.attr('stroke', 'rgba(233,238,246,0.95)')
+            .attr('stroke-width', 3.0)
+            .attr('opacity', 1.0)
+            .attr('stroke-dasharray', '4,5');
+        } else {
+          // 恢复默认样式
+          mp.attr('stroke', 'rgba(233,238,246,0.70)')
+            .attr('stroke-width', 2.2)
+            .attr('opacity', 0.85)
+            .attr('stroke-dasharray', '6,6');
+        }
+      }
+      // --- end helpers ---
+
+      const drag = d3.drag()
+        .on('start', function(ev, d) {
+          // 关键：拖动时不要触发 renderChart()（它会删除并重建 SVG，导致点“跳”且鼠标不同步）
+          // 若未选中该变量：仅更新 selection 状态与样式（不重绘）
+          if (!state.selected.has(d.var)) {
+            state.selected.clear();
+            state.selected.add(d.var);
+            renderLegend();
+            renderSelectionPanel();
+            applySelectionStylesInPlace();
+            updateMeanLineInPlace();
+          }
+
+          setMeanLineHighlight(true);
+
+          state._dragging = true;
+          d._from = currentMean(d.var, d.t);
+          d3.select(this).attr('r', 6.2);
+        })
+        .on('drag', function(ev, d) {
+          // 锁住 X，只允许 Y（拖动中不重算坐标轴范围）
+          const yPx = Math.max(0, Math.min(innerH, ev.y));
+          const newVal = y.invert(yPx);
+          const k = keyVT(d.var, d.t);
+          state.overrides.set(k, newVal);
+
+          // 更新本点位置
+          d3.select(this).attr('cy', y(newVal));
+
+          // 仅增量更新：该变量折线 + 均值线 + 描述表
+          updateVarLineInPlace(d.var);
+          updateMeanLineInPlace();
+          renderDescTable();
+        })
+        .on('end', function(ev, d) {
+          state._dragging = false;
+
+          const to = currentMean(d.var, d.t);
+          d3.select(this).attr('r', state.selected.has(d.var) ? 4.6 : 3.2);
+
+          const from = d._from;
+          if (from != null && !Number.isNaN(from) && to != null && !Number.isNaN(to) && Math.abs(to - from) > 1e-12) {
+            pushHistory({
+              var: d.var,
+              t: d.t,
+              from,
+              to,
+              at: new Date().toLocaleString(),
+            });
+          }
+
+          setMeanLineHighlight(false);
+
+          // 鼠标松开后再允许图表重新计算 y 轴范围并整体刷新
+          renderChart();
+          renderDescTable();
+        });
+
+      points.call(drag);
+
+      // 当前数据概览
+      const nSubj = new Set(state.rawRows.map(r => r.__sid)).size;
+      const vizN = getVizVarsList().length;
+      el.pill.textContent = `${nSubj} subjects · ${vizN} vars (of ${state.vars.length}) · ${state.times.length} timepoints`;
+    }
+
+    // ----------------------------
+    // 总渲染入口
+    // ----------------------------
+    function hydrateFromParsed(parsed) {
+      state.rawRows = parsed.rows;
+      state.subjectKey = parsed.subjectKey;
+      state.timeKey = parsed.timeKey;
+      state.vars = parsed.vars;
+      state.times = parsed.times;
+      state.headers = parsed.headers || [];
+
+      // 默认：载入新数据后，全部变量参与可视化
+      state.vizVars = new Set(state.vars);
+      renderVarPicker();
+
+      renderRawPreview(parsed.headers, parsed.rows);
+      showRawPreview();
+
+      const { means, valuesByVar } = summarizeData(parsed.rows, parsed.vars, parsed.times);
+      state.means = means;
+      state.valuesByVar = valuesByVar;
+
+      // 初始化 colors
+      state.colors = makeColorScale(state.vars);
+
+      // 清理 overrides / selection / history（避免不同数据串台）
+      state.overrides.clear();
+      state.selected.clear();
+      state.history = [];
+
+      // 固化原始 mean
+      state.means0 = new Map(means);
+
+      // 初始化图表
+      initChart();
+
+      // 渲染
+      renderLegend();
+      renderSelectionPanel();
+      renderGroups();
+      renderDescTable();
+      renderChart();
+
+      // 状态
+      const warn = parsed.warnings || [];
+      const meta = parsed.metaWarnings || [];
+
+      // settings 面板里的警告也同步显示
+      setGroupVarWarn(meta.join('\n'));
+
+      if (warn.length && meta.length) {
+        setStatus(`解析成功：${parsed.rows.length} 行（忽略 ${warn.length} 行异常）。\n第一条异常：第 ${warn[0].lineNo} 行，${warn[0].reason}\n\n${meta.join('\n')}`, 'ok');
+      } else if (warn.length) {
+        setStatus(`解析成功：${parsed.rows.length} 行（忽略 ${warn.length} 行异常）。\n第一条异常：第 ${warn[0].lineNo} 行，${warn[0].reason}`, 'ok');
+      } else {
+        setStatus(`解析成功：${parsed.rows.length} 行。`, 'ok');
+      }
+    }
+
+    function parseAndRender() {
+      const text = el.ta.value;
+      const groupVarName = el.groupVarInput ? el.groupVarInput.value : 'T';
+      const parsed = parseRaw(text, { timeVarName: groupVarName });
+      hideRawPreview();
+      el.rawTextDetails.open = true;
+      if (!parsed.ok) {
+        setStatus(`解析失败：${parsed.error}`, 'err');
+        el.pill.textContent = '未载入数据';
+        el.descPill.textContent = '等待数据';
+        // 清空图
+        if (gMain) gMain.selectAll('*').remove();
+        el.legend.innerHTML = `<div class="hint">无可用图注。</div>`;
+        el.sel.innerHTML = `<div class="hint">无可用选择信息。</div>`;
+        el.groupsWrap.innerHTML = `<div class="hint">等待数据。</div>`;
+        el.descTable.querySelector('thead').innerHTML = '';
+        el.descTable.querySelector('tbody').innerHTML = '';
+        // 清空变量列表（避免解析失败时仍显示上一份数据的变量）
+        state.rawRows = [];
+        state.headers = [];
+        state.timeKey = null;
+        state.subjectKey = null;
+        state.vars = [];
+        state.times = [];
+        state.vizVars = new Set();
+        renderVarPicker();
+        setGroupVarWarn('');
+        return;
+      }
+      hydrateFromParsed(parsed);
+    }
+
+    // ----------------------------
+    // Reset
+    // ----------------------------
+    function hardReset() {
+      state.overrides.clear();
+      state.selected.clear();
+      state.history = [];
+      renderLegend();
+      renderSelectionPanel();
+      renderDescTable();
+      renderChart();
+      renderVarPicker();
+      setGroupVarWarn('');
+      setStatus('已 Reset：恢复原始均值并清空选择与历史。', 'ok');
+    }
+
+    function resetAndRefreshFromCurrentInput() {
+        const text = el.ta.value;
+        const groupVarName = el.groupVarInput ? el.groupVarInput.value : 'T';
+        const parsed = parseRaw(text, { timeVarName: groupVarName });
+
+        if (!parsed.ok) {
+            setStatus(`Reset 失败：当前输入无法解析，因此无法刷新图注变量名。\n原因：${parsed.error}`, 'err');
+            setGroupVarWarn('');
+            return;
+        }
+
+        // 重新以当前输入为准，完整刷新 state.vars / colors / legend / chart / desc
+        hydrateFromParsed(parsed);
+
+        // hydrateFromParsed 会写“解析成功…”，这里覆盖为更符合 Reset 语义的提示
+        setStatus('已 Reset：恢复原始均值、清空选择/历史，并按当前输入数据刷新图注变量名。', 'ok');
+    }
+
+    // ----------------------------
+    // 事件绑定
+    // ----------------------------
+    document.getElementById('btnParse').addEventListener('click', parseAndRender);
+
+    document.getElementById('btnUpload').addEventListener('click', () => {
+      const inp = document.getElementById('fileInput');
+      inp.click();
+    });
+
+    document.getElementById('fileInput').addEventListener('change', (ev) => {
+      const inp = ev.currentTarget;
+      const file = inp && inp.files && inp.files[0];
+      if (!file) return;
+
+      readFileAsText(file)
+        .then((text) => {
+          el.ta.value = text;
+          parseAndRender();
+          setStatus(`已载入文件：${file.name}（${file.size} bytes）`, 'ok');
+        })
+        .catch((err) => {
+          const msg = (err && err.message) ? err.message : String(err);
+          setStatus(`读取文件失败：${msg}`, 'err');
+        })
+        .finally(() => {
+          // 允许再次选择同一文件也触发 change
+          if (inp) inp.value = '';
+        });
+    });
+
+    document.getElementById('btnReset').addEventListener('click', () => {
+        resetAndRefreshFromCurrentInput();
+    });
+
+    document.getElementById('btnPasteExample').addEventListener('click', () => {
+      el.ta.value = EXAMPLE_TSV;
+      parseAndRender();
+    });
+
+    document.getElementById('btnClear').addEventListener('click', () => {
+      el.ta.value = '';
+      hideRawPreview();
+      el.rawTextDetails.open = true;
+      setStatus('已清空输入。', 'ok');
+    });
+
+    document.getElementById('btnSelectAll').addEventListener('click', () => {
+      if (!state.vars.length) return;
+      setSelection(state.vars, false);
+    });
+
+    document.getElementById('btnSelectNone').addEventListener('click', () => {
+      clearSelection();
+    });
+
+    document.getElementById('btnClearHistory').addEventListener('click', () => {
+      state.history = [];
+      renderSelectionPanel();
+    });
+
+    document.getElementById('btnAddGroup').addEventListener('click', () => {
+      state.groups.push({ name: `Group ${state.groups.length + 1}`, vars: [] });
+      renderGroups();
+    });
+
+    // 窗口 resize 时重绘
+    window.addEventListener('resize', () => {
+      if (!state.vars.length) return;
+      initChart();
+      renderChart();
+    });
+
+    // 初始：不自动解析（避免你没贴数据时就被网页自作主张）
+    setStatus('尚未解析。请在左侧粘贴数据并点击“解析并绘图”。');
+
+    document.getElementById('btnVarsAll')?.addEventListener('click', () => {
+        if (!state.vars.length) return;
+        setVizVarsAll();
+    });
+
+    document.getElementById('btnVarsNone')?.addEventListener('click', () => {
+        if (!state.vars.length) return;
+        setVizVarsNone();
+    });
+
+    el.groupVarInput?.addEventListener('input', () => {
+        setGroupVarWarn('');
+    });
+  </script>
+</body>

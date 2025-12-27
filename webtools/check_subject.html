@@ -1,0 +1,1727 @@
+from pathlib import Path
+
+html = r"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>重复测量轨迹可视化（被试折线 + 组均值 + 可拖动点）</title>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <style>
+    :root{
+      --bg:#0b0f14;
+      --panel:#111824;
+      --panel2:#0f1620;
+      --text:#e9eef6;
+      --muted:#a6b3c6;
+      --border:rgba(255,255,255,0.10);
+      --accent:#7aa2ff;
+      --danger:#ff6b6b;
+      --ok:#4ad295;
+      --shadow:0 10px 25px rgba(0,0,0,0.30);
+      --radius:14px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    }
+    *{ box-sizing:border-box; }
+    html, body{ height:100%; }
+    body{
+      margin:0;
+      font-family:var(--sans);
+      background:
+        radial-gradient(1200px 800px at 15% 0%, rgba(122,162,255,0.20), transparent 55%),
+        radial-gradient(900px 600px at 85% 15%, rgba(74,210,149,0.12), transparent 60%),
+        var(--bg);
+      color:var(--text);
+    }
+    .app{ max-width: 1600px; margin: 18px auto; padding: 0 14px 18px; }
+    .topbar{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin: 8px 0 14px; }
+    .title{ font-size: 20px; font-weight: 750; letter-spacing: 0.2px; }
+    .subtitle{
+      margin-top: 6px; font-size: 13px; color: var(--muted);
+      line-height: 1.55; max-width: 980px;
+    }
+    .toolbar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+    .grid{
+      display:grid;
+      grid-template-columns: 360px 1fr 320px;
+      grid-template-areas:
+        "left mid right"
+        "left desc desc";
+      gap: 14px;
+      align-items:start;
+    }
+    .leftStack{ grid-area:left; display:flex; flex-direction:column; gap:14px; min-width:0; }
+    .midStack{ grid-area:mid; display:flex; flex-direction:column; gap:14px; min-width:0; }
+    .rightStack{ grid-area:right; display:flex; flex-direction:column; gap:14px; min-width:0; }
+    .descStack{ grid-area:desc; min-width:0; }
+
+    .panel{
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent 60%), var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow:hidden;
+    }
+    .panel .hd{
+      display:flex; align-items:center; justify-content:space-between;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      gap:10px;
+    }
+    .panel .hd .label{
+      font-weight: 700; font-size: 13px; letter-spacing:0.2px;
+      color: var(--text); display:flex; align-items:center; gap:10px; min-width: 0;
+    }
+    .panel .hd .actions{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    .panel .bd{ padding: 12px; }
+
+    .btn{
+      appearance:none; border:1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      padding: 7px 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      cursor:pointer;
+      transition: transform 0.03s ease, background 0.15s ease, border-color 0.15s ease;
+      user-select:none;
+    }
+    .btn:hover{ background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.22); }
+    .btn:active{ transform: translateY(1px); }
+    .btn.primary{ border-color: rgba(122,162,255,0.55); background: rgba(122,162,255,0.18); }
+    .btn.danger{ border-color: rgba(255,107,107,0.55); background: rgba(255,107,107,0.12); }
+
+    .pill{
+      font-size: 11px; padding: 2px 8px; border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.12);
+      color: var(--muted);
+      background: rgba(255,255,255,0.03);
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+    .hint{ color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .warn{ color: rgba(255,198,107,0.95); font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+    .status{ font-size:12px; color: var(--muted); white-space: pre-wrap; margin-top: 8px; }
+    .status.ok{ color: rgba(74,210,149,0.95); }
+    .status.err{ color: rgba(255,107,107,0.95); }
+
+    /* Raw preview table */
+    .tableWrap{
+      overflow:auto;
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 12px;
+      background: rgba(0,0,0,0.10);
+    }
+    table{ width:100%; border-collapse:collapse; font-size:12px; min-width: 920px; }
+    th, td{ padding: 9px 10px; border-bottom: 1px solid rgba(255,255,255,0.08); vertical-align: top; }
+    th{
+      position: sticky; top: 0;
+      background: rgba(15,22,32,0.95);
+      z-index: 1;
+      text-align:left; color: rgba(233,238,246,0.92);
+      font-weight: 650; white-space: nowrap;
+    }
+    td{ color: rgba(233,238,246,0.88); font-family: var(--mono); white-space: nowrap; }
+    tr:hover td{ background: rgba(255,255,255,0.02); }
+
+    details > summary{ cursor:pointer; user-select:none; list-style:none; }
+    details > summary::-webkit-details-marker{ display:none; }
+    details > summary::before{ content:"▸ "; color: rgba(233,238,246,0.75); }
+    details[open] > summary::before{ content:"▾ "; }
+
+    #rawTextarea{
+      width:100%; min-height: 220px; resize: vertical;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 12px; padding: 10px;
+      color: var(--text);
+      background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent 55%), var(--panel2);
+      font-family: var(--mono);
+      font-size: 12px; line-height: 1.45;
+      outline:none;
+    }
+
+    .fieldRow{ display:flex; align-items:center; gap: 8px; flex-wrap:wrap; }
+    .fieldRow label{ font-size: 12px; color: var(--muted); min-width: 96px; }
+    .fieldRow input, .fieldRow select{
+      width: 100%; max-width: 240px;
+      padding: 7px 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(17,24,36,0.75);
+      color: var(--text);
+      outline:none;
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+
+    .kv{ display:grid; grid-template-columns: 1fr; gap: 10px; }
+    .miniHint{ font-size: 11px; color: rgba(166,179,198,0.95); line-height: 1.45; }
+
+    /* Charts */
+    .chartBox{
+      width: 100%; height: 300px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.03), transparent 60%),
+        radial-gradient(800px 500px at 30% 30%, rgba(122,162,255,0.10), transparent 60%),
+        rgba(0,0,0,0.15);
+      overflow:hidden;
+      position:relative;
+    }
+    .overlayNote{
+      position:absolute; bottom: 10px; left: 12px; right: 12px;
+      color: rgba(233,238,246,0.82);
+      font-size: 12px; line-height: 1.45;
+      background: rgba(15,22,32,0.65);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 12px;
+      padding: 8px 10px;
+      pointer-events:none;
+    }
+
+    /* Legend lists */
+    .legendList{ max-height: 260px; overflow:auto; padding-right: 6px; }
+    .legendItem{
+      display:flex; align-items:center; justify-content:space-between;
+      gap: 10px;
+      padding: 7px 8px;
+      border-radius: 10px;
+      cursor:pointer;
+      border: 1px solid transparent;
+    }
+    .legendItem:hover{ background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.09); }
+    .legendItem.selected{ background: rgba(122,162,255,0.12); border-color: rgba(122,162,255,0.35); }
+    .legendLeft{ display:flex; align-items:center; gap:10px; min-width:0; }
+    .swatch{ width:10px; height:10px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.25); flex:0 0 auto; }
+    .legendName{ font-size:12px; color: var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width: 210px; }
+
+    /* Interaction log */
+    #logBox{ min-height: 160px; max-height: 240px; overflow:auto; padding-right: 6px; }
+    .logItem{
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(0,0,0,0.15);
+      border-radius: 12px;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+    }
+    .logItem .k{ color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+    .logItem .v{ color: var(--text); font-size: 12px; font-family: var(--mono); white-space: pre-wrap; line-height: 1.45; }
+
+    /* Desc */
+    .descTabs{ display:flex; gap:8px; flex-wrap:wrap; }
+    .tab{
+      appearance:none;
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.03);
+      color: var(--text);
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      cursor:pointer;
+      user-select:none;
+    }
+    .tab.on{ border-color: rgba(74,210,149,0.55); background: rgba(74,210,149,0.14); }
+    .descNote{ margin-top: 10px; }
+
+    /* SVG styles */
+    .axis path, .axis line{ stroke: rgba(255,255,255,0.18); }
+    .axis text{ fill: rgba(233,238,246,0.75); font-size: 11px; }
+    .gridline{ stroke: rgba(255,255,255,0.08); }
+    .line-subject{
+      fill:none;
+      stroke-width: 1.2;
+      opacity: 0.55;
+      cursor:pointer;
+    }
+    .line-subject.selected{
+      stroke-width: 2.8;
+      opacity: 0.98;
+    }
+    .line-subject.dim{ opacity: 0.12; }
+
+    .pt-subject{
+      stroke: rgba(0,0,0,0.35);
+      stroke-width: 0.7;
+      cursor: ns-resize;
+    }
+    .pt-subject.selected{
+      stroke: rgba(255,255,255,0.55);
+      stroke-width: 1.2;
+    }
+    .pt-subject.dim{ opacity: 0.18; }
+
+    /* Mean line should be clearly visible on dark background */
+    .line-mean{
+      fill:none;
+      stroke: rgba(255,255,255,0.92);
+      stroke-width: 3.4;
+      opacity: 0.95;
+      pointer-events:none;
+    }
+    .pt-mean{
+      fill: rgba(255,255,255,0.92);
+      stroke: rgba(0,0,0,0.35);
+      stroke-width: 0.7;
+      pointer-events:none;
+    }
+
+    @media (max-width: 1180px){
+      .grid{
+        grid-template-columns: 1fr;
+        grid-template-areas:
+          "left"
+          "mid"
+          "right"
+          "desc";
+      }
+      table{ min-width: 720px; }
+      .chartBox{ height: 320px; }
+      .legendList{ max-height: 260px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="topbar">
+      <div>
+        <div class="title">重复测量均值与个体轨迹可视化</div>
+        <div class="subtitle">
+          输入长表数据（CSV/TSV），指定 <span style="font-family:var(--mono)">被试ID列</span>、<span style="font-family:var(--mono)">X轴列</span>（时间点/阶段等）、可选的 <span style="font-family:var(--mono)">分组列</span>。
+          每次仅绘制一个数值变量：每个被试一条折线，附加组内均值折线。支持拖动单个被试在某个X点的圆点，实时更新均值线并记录修改。
+        </div>
+      </div>
+      <div class="toolbar">
+        <button class="btn primary" id="btnParse">解析并绘图</button>
+        <button class="btn danger" id="btnReset">Reset</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <!-- Left: import + settings + log -->
+      <div class="leftStack">
+        <section class="panel">
+          <div class="hd">
+            <div class="label">数据导入</div>
+            <div class="actions">
+              <input id="fileInput" type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" style="display:none" />
+              <button class="btn" id="btnUpload">上传 CSV/TSV</button>
+              <button class="btn" id="btnExample">填入示例</button>
+              <button class="btn" id="btnClear">清空</button>
+            </div>
+          </div>
+          <div class="bd">
+            <div class="hint">
+              解析提示：建议使用“长表”。每行是一条观测，至少包含：被试ID、X轴、一个数值变量；可选包含分组列。若同一被试同一X出现多行，将按均值聚合（对齐你的 Python 代码的 <span style="font-family:var(--mono)">groupby().mean()</span>）。
+            </div>
+
+            <div class="tableWrap" id="rawPreviewArea" style="margin-top:10px; max-height: 240px; display:none;">
+              <table id="rawPreviewTable">
+                <thead></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+
+            <details id="rawTextDetails" style="margin-top:10px;">
+              <summary class="hint">原始文本（可编辑，支持粘贴 TSV/CSV）</summary>
+              <textarea id="rawTextarea" placeholder="粘贴 CSV/TSV...\n例如：\nsubject_id,var1,var2,t_id,group\nP001,1.2,3.4,1,A\nP001,1.5,3.1,2,A\n..."></textarea>
+            </details>
+
+            <div id="parseStatus" class="status">尚未解析。</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="hd">
+            <div class="label">数据设定</div>
+            <div class="actions">
+              <span class="pill" id="pillMeta">未载入数据</span>
+            </div>
+          </div>
+          <div class="bd">
+            <div class="kv">
+              <div class="fieldRow">
+                <label for="idCol">被试ID列</label>
+                <select id="idCol"></select>
+              </div>
+
+              <div class="fieldRow">
+                <label for="xCol">X轴列</label>
+                <select id="xCol"></select>
+              </div>
+
+              <div class="fieldRow">
+                <label for="gCol">分组列</label>
+                <select id="gCol"></select>
+              </div>
+
+              <div class="fieldRow">
+                <label for="yVar">可视化变量</label>
+                <select id="yVar"></select>
+              </div>
+
+              <div id="settingsWarn" class="warn" style="display:none;"></div>
+
+              <div class="miniHint">
+                说明：
+                <ul style="margin:6px 0 0 18px; padding:0;">
+                  <li>分组列可以留空或选择“(无)”，此时仅绘制上窗口。</li>
+                  <li>若分组列存在多个水平，可在“组别映射”指定上/下窗口展示的两个组。</li>
+                  <li>拖动仅修改前端聚合值，不会写回文件。</li>
+                </ul>
+              </div>
+
+              <div id="groupMapping" style="display:none; margin-top:8px;">
+                <div class="hint" style="margin-bottom:8px;">组别映射（用于两个可视化窗口）</div>
+                <div class="fieldRow">
+                  <label for="gTop">上窗口</label>
+                  <select id="gTop"></select>
+                </div>
+                <div class="fieldRow" style="margin-top:8px;">
+                  <label for="gBottom">下窗口</label>
+                  <select id="gBottom"></select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="hd">
+            <div class="label">数据交互记录</div>
+            <div class="actions">
+              <button class="btn" id="btnClearLog">清空记录</button>
+            </div>
+          </div>
+          <div class="bd">
+            <div class="hint" style="margin-bottom:10px;">
+              记录格式：group / subject / X / var：旧值 → 新值。
+            </div>
+            <div id="logBox"></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Middle: two charts -->
+      <div class="midStack">
+        <section class="panel">
+          <div class="hd">
+            <div class="label">数据可视化（上窗口）<span class="pill" id="pillTop">等待数据</span></div>
+            <div class="actions">
+              <span class="pill" id="pillTopSel">未选择被试</span>
+            </div>
+          </div>
+          <div class="bd">
+            <div class="chartBox" id="chartTop">
+              <div class="overlayNote">
+                交互：点击折线或右侧图注选择被试（Shift 可多选）；拖动圆点仅做纵向调整，组内均值线会即时更新。
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="bottomChartPanel">
+          <div class="hd">
+            <div class="label">数据可视化（下窗口）<span class="pill" id="pillBottom">等待数据</span></div>
+            <div class="actions">
+              <span class="pill" id="pillBottomSel">未选择被试</span>
+            </div>
+          </div>
+          <div class="bd">
+            <div class="chartBox" id="chartBottom"></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Right: two legends -->
+      <div class="rightStack">
+        <section class="panel">
+          <div class="hd">
+            <div class="label">图注信息（上窗口）</div>
+            <div class="actions">
+              <button class="btn" id="btnTopAll">全选</button>
+              <button class="btn" id="btnTopNone">全不选</button>
+            </div>
+          </div>
+          <div class="bd">
+            <div class="hint" style="margin-bottom:10px;">点击被试以高亮对应折线（Shift 可多选）。</div>
+            <div class="legendList" id="legendTop"></div>
+          </div>
+        </section>
+
+        <section class="panel" id="bottomLegendPanel">
+          <div class="hd">
+            <div class="label">图注信息（下窗口）</div>
+            <div class="actions">
+              <button class="btn" id="btnBottomAll">全选</button>
+              <button class="btn" id="btnBottomNone">全不选</button>
+            </div>
+          </div>
+          <div class="bd">
+            <div class="hint" style="margin-bottom:10px;">点击被试以高亮对应折线（Shift 可多选）。</div>
+            <div class="legendList" id="legendBottom"></div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Bottom: data description -->
+      <section class="panel descStack">
+        <div class="hd">
+          <div class="label">数据描述</div>
+          <div class="actions">
+            <span class="pill" id="pillDesc">等待数据</span>
+          </div>
+        </div>
+        <div class="bd">
+          <div class="hint">
+            该表仅针对当前“可视化变量”。每个被试一行：展示各X点值、该被试均值与方差；并给出组内在各X点的均值/方差，以及组内整体均值/方差（以“被试均值”为单位聚合，保持与 Python 的思路一致）。
+          </div>
+          <div class="descNote">
+            <div class="descTabs" id="descTabs"></div>
+          </div>
+          <div class="tableWrap" style="margin-top:10px;">
+            <table id="descTable">
+              <thead></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    // ==========================================================
+    // 示例数据（长表）
+    // ==========================================================
+    const EXAMPLE_CSV = `subject_id,var1,var2,t,group
+P001,2,5,1,A
+P001,3,6,2,A
+P001,2,9,3,A
+P002,28,3,1,A
+P002,30,4,2,A
+P002,29,6,3,A
+P003,12,8,1,B
+P003,11,7,2,B
+P003,13,9,3,B
+P004,9,1,1,B
+P004,10,2,2,B
+P004,8,1,3,B`;
+
+    // ==========================================================
+    // DOM refs
+    // ==========================================================
+    const el = {
+      fileInput: document.getElementById('fileInput'),
+      btnUpload: document.getElementById('btnUpload'),
+      btnExample: document.getElementById('btnExample'),
+      btnClear: document.getElementById('btnClear'),
+      btnParse: document.getElementById('btnParse'),
+      btnReset: document.getElementById('btnReset'),
+      btnClearLog: document.getElementById('btnClearLog'),
+
+      rawTextarea: document.getElementById('rawTextarea'),
+      rawPreviewArea: document.getElementById('rawPreviewArea'),
+      rawPreviewTable: document.getElementById('rawPreviewTable'),
+      parseStatus: document.getElementById('parseStatus'),
+
+      idCol: document.getElementById('idCol'),
+      xCol: document.getElementById('xCol'),
+      gCol: document.getElementById('gCol'),
+      yVar: document.getElementById('yVar'),
+      pillMeta: document.getElementById('pillMeta'),
+      settingsWarn: document.getElementById('settingsWarn'),
+
+      groupMapping: document.getElementById('groupMapping'),
+      gTop: document.getElementById('gTop'),
+      gBottom: document.getElementById('gBottom'),
+
+      chartTop: document.getElementById('chartTop'),
+      chartBottom: document.getElementById('chartBottom'),
+      bottomChartPanel: document.getElementById('bottomChartPanel'),
+
+      pillTop: document.getElementById('pillTop'),
+      pillBottom: document.getElementById('pillBottom'),
+      pillTopSel: document.getElementById('pillTopSel'),
+      pillBottomSel: document.getElementById('pillBottomSel'),
+
+      legendTop: document.getElementById('legendTop'),
+      legendBottom: document.getElementById('legendBottom'),
+      bottomLegendPanel: document.getElementById('bottomLegendPanel'),
+
+      btnTopAll: document.getElementById('btnTopAll'),
+      btnTopNone: document.getElementById('btnTopNone'),
+      btnBottomAll: document.getElementById('btnBottomAll'),
+      btnBottomNone: document.getElementById('btnBottomNone'),
+
+      logBox: document.getElementById('logBox'),
+
+      pillDesc: document.getElementById('pillDesc'),
+      descTabs: document.getElementById('descTabs'),
+      descTable: document.getElementById('descTable'),
+    };
+
+    // ==========================================================
+    // State
+    // ==========================================================
+    const state = {
+      rawText: "",
+      rawRows: [],
+      cols: [],
+      // settings
+      idCol: null,
+      xCol: null,
+      gCol: null,        // optional
+      yVar: null,
+      gTop: null,
+      gBottom: null,
+      // derived
+      groups: [],
+      uniqueX: [],
+      xIsNumeric: false,
+      // aggregated points:
+      // key = `${group}||${subject}||${x}`
+      aggMap: new Map(),
+      // caches for rendering
+      subjectsByGroup: new Map(),     // group -> [subject]
+      pointsByGroup: new Map(),       // group -> [point objects]
+      selectedByGroup: new Map(),     // group -> Set(subject)
+      logs: [],
+      // active description group
+      descActiveGroup: null,
+    };
+
+    // ==========================================================
+    // Utilities
+    // ==========================================================
+    function setStatus(text, kind=""){
+      el.parseStatus.textContent = text;
+      el.parseStatus.classList.remove("ok","err");
+      if(kind) el.parseStatus.classList.add(kind);
+    }
+
+    function guessDelimiter(text){
+      // 粗略启发式：若制表符出现次数明显多于逗号，则按 TSV
+      const nTab = (text.match(/\t/g) || []).length;
+      const nComma = (text.match(/,/g) || []).length;
+      if(nTab > nComma) return "\t";
+      return ",";
+    }
+
+    function parseTextToRows(text){
+      const delim = guessDelimiter(text);
+      try{
+        const rows = (delim === "\t") ? d3.tsvParse(text) : d3.csvParse(text);
+        return { rows, delim, err: null };
+      }catch(e){
+        return { rows: [], delim, err: e };
+      }
+    }
+
+    function isFiniteNumber(x){
+      const v = Number(x);
+      return Number.isFinite(v);
+    }
+
+    function uniquePreserveOrder(arr){
+      const seen = new Set();
+      const out = [];
+      for(const x of arr){
+        const k = String(x);
+        if(!seen.has(k)){
+          seen.add(k);
+          out.push(x);
+        }
+      }
+      return out;
+    }
+
+    function computeVariance(nums){
+      // 以样本方差（ddof=1）为默认（更接近研究场景），但当 n<2 返回 NaN
+      const x = nums.filter(v => Number.isFinite(v));
+      const n = x.length;
+      if(n < 2) return NaN;
+      const mean = x.reduce((a,b)=>a+b,0) / n;
+      const ss = x.reduce((a,b)=>a + (b-mean)*(b-mean), 0);
+      return ss / (n - 1);
+    }
+
+    function round3(v){
+      if(!Number.isFinite(v)) return "";
+      return (Math.round(v * 1000) / 1000).toFixed(3);
+    }
+
+    function clearNode(node){
+      while(node.firstChild) node.removeChild(node.firstChild);
+    }
+
+    function mkOption(value, label=value){
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      return opt;
+    }
+
+    // Stable per-subject color (deterministic hash -> continuous colormap)
+    function hashToUnitInterval(str){
+      // FNV-1a 32-bit
+      let h = 2166136261;
+      const s = String(str);
+      for(let i=0;i<s.length;i++){
+        h ^= s.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      // map to [0,1)
+      return ((h >>> 0) / 4294967296);
+    }
+
+    function subjectColor(subject){
+      const t = hashToUnitInterval(subject);
+      // d3 provides interpolators; Turbo is vivid and distinct.
+      return d3.interpolateTurbo(t);
+    }
+
+    // ==========================================================
+    // Raw preview rendering (first 100 rows)
+    // ==========================================================
+    function renderRawPreview(rows, cols){
+      if(!rows.length || !cols.length){
+        el.rawPreviewArea.style.display = "none";
+        return;
+      }
+      el.rawPreviewArea.style.display = "block";
+      const thead = el.rawPreviewTable.querySelector('thead');
+      const tbody = el.rawPreviewTable.querySelector('tbody');
+      clearNode(thead);
+      clearNode(tbody);
+
+      const trh = document.createElement('tr');
+      for(const c of cols){
+        const th = document.createElement('th');
+        th.textContent = c;
+        trh.appendChild(th);
+      }
+      thead.appendChild(trh);
+
+      const n = Math.min(100, rows.length);
+      for(let i=0;i<n;i++){
+        const r = rows[i];
+        const tr = document.createElement('tr');
+        for(const c of cols){
+          const td = document.createElement('td');
+          td.textContent = (r[c] ?? "");
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+    }
+
+    // ==========================================================
+    // Settings panel
+    // ==========================================================
+    function populateSettings(cols){
+      // 保留用户当前已选择的值（避免后续重绘/重算把选择“刷回默认”）
+      const cur = {
+        id: el.idCol.value,
+        x: el.xCol.value,
+        g: el.gCol.value,
+        y: el.yVar.value,
+      };
+
+      // idCol / xCol / gCol / yVar
+      const selects = [el.idCol, el.xCol, el.gCol, el.yVar];
+      for(const s of selects){
+        clearNode(s);
+      }
+
+      // 分组列允许“(无)”
+      el.gCol.appendChild(mkOption("__NONE__", "(无)"));
+
+      for(const c of cols){
+        el.idCol.appendChild(mkOption(c));
+        el.xCol.appendChild(mkOption(c));
+        el.gCol.appendChild(mkOption(c));
+        el.yVar.appendChild(mkOption(c));
+      }
+
+      // ====== 默认猜测（仅当当前选择无效时才使用） ======
+      const lower = cols.map(c => [c, c.toLowerCase()]);
+      const findBy = (keys) => {
+        for(const [orig, low] of lower){
+          if(keys.includes(low)) return orig;
+        }
+        return null;
+      };
+      const idGuess = findBy(["subject_id","subject","sid","id","user_id","participant","participant_id"]);
+      const xGuess  = findBy(["t","t_id","time","time_id","phase","phase_id","session","wave"]);
+      const gGuess  = findBy(["group","cond","condition","task","arm"]);
+
+      // yVar guess: first numeric-like column (quick scan)
+      let yGuess = null;
+      if(state.rawRows.length){
+        const candidates = cols.filter(c => c !== idGuess && c !== xGuess && c !== gGuess);
+        for(const c of candidates){
+          let ok = 0;
+          for(let i=0;i<Math.min(40, state.rawRows.length);i++){
+            if(isFiniteNumber(state.rawRows[i][c])) ok++;
+          }
+          if(ok >= 5){ yGuess = c; break; }
+        }
+      }
+
+      const colSet = new Set(cols);
+
+      // ====== 选择优先级：当前UI选择 > 旧state > 猜测默认 > 兜底 ======
+      const pickCol = (curVal, stateVal, guessVal, fallbackVal) => {
+        if(curVal && colSet.has(curVal)) return curVal;
+        if(stateVal && colSet.has(stateVal)) return stateVal;
+        if(guessVal && colSet.has(guessVal)) return guessVal;
+        if(fallbackVal && colSet.has(fallbackVal)) return fallbackVal;
+        return cols[0] ?? null;
+      };
+
+      state.idCol = pickCol(cur.id, state.idCol, idGuess, cols[0]);
+      state.xCol  = pickCol(cur.x, state.xCol, xGuess, cols[1] ?? cols[0]);
+
+      // gCol: 允许 __NONE__
+      const pickGroupCol = () => {
+        const okCur = (cur.g === "__NONE__") || (cur.g && colSet.has(cur.g));
+        const okState = (state.gCol === "__NONE__") || (state.gCol && colSet.has(state.gCol));
+        if(okCur) return cur.g || "__NONE__";
+        if(okState) return state.gCol || "__NONE__";
+        if(gGuess && colSet.has(gGuess)) return gGuess;
+        return "__NONE__";
+      };
+      state.gCol = pickGroupCol();
+
+      state.yVar = pickCol(cur.y, state.yVar, yGuess, cols.find(c => c !== state.idCol && c !== state.xCol));
+
+      // 写回 UI
+      if(state.idCol) el.idCol.value = state.idCol;
+      if(state.xCol) el.xCol.value = state.xCol;
+      el.gCol.value = state.gCol ?? "__NONE__";
+      if(state.yVar) el.yVar.value = state.yVar;
+
+      el.pillMeta.textContent = `列数 ${cols.length}，行数 ${state.rawRows.length}`;
+    }
+
+    function readSettingsFromUI(){
+      state.idCol = el.idCol.value || null;
+      state.xCol = el.xCol.value || null;
+      state.gCol = el.gCol.value || "__NONE__";
+      state.yVar = el.yVar.value || null;
+
+      // group mapping
+      state.gTop = el.gTop.value || null;
+      state.gBottom = el.gBottom.value || null;
+    }
+
+    function validateSettings(){
+      const errs = [];
+      const warns = [];
+
+      const cols = new Set(state.cols);
+      if(!state.idCol || !cols.has(state.idCol)) errs.push("被试ID列不存在。");
+      if(!state.xCol || !cols.has(state.xCol)) errs.push("X轴列不存在。");
+      if(!state.yVar || !cols.has(state.yVar)) errs.push("可视化变量列不存在。");
+
+      if(state.gCol !== "__NONE__" && !cols.has(state.gCol)){
+        errs.push("分组列不存在。");
+      }
+
+      // yVar numeric check (coerce)
+      let numericCount = 0;
+      for(let i=0;i<Math.min(100, state.rawRows.length);i++){
+        if(isFiniteNumber(state.rawRows[i][state.yVar])) numericCount++;
+      }
+      if(numericCount === 0){
+        errs.push("可视化变量在抽样行中均无法解析为数值。");
+      }else if(numericCount < Math.min(10, Math.floor(0.3 * Math.min(100, state.rawRows.length)))){
+        warns.push("可视化变量存在较多不可解析为数值的单元格，已按缺失值处理。");
+      }
+
+      // X axis numeric? if most numeric -> numeric
+      let xNumeric = 0;
+      let xTotal = 0;
+      for(let i=0;i<Math.min(200, state.rawRows.length);i++){
+        const v = state.rawRows[i][state.xCol];
+        if(v === null || v === undefined || String(v).trim() === "") continue;
+        xTotal++;
+        if(isFiniteNumber(v)) xNumeric++;
+      }
+      state.xIsNumeric = (xTotal > 0 && xNumeric / xTotal >= 0.7);
+      if(!state.xIsNumeric){
+        warns.push("X轴列将按“类别顺序”处理（按数据出现顺序去重），而非数值排序。");
+      }
+
+      return { errs, warns };
+    }
+
+    // ==========================================================
+    // Aggregation (match python: groupby([cond, subject, time]).mean)
+    // ==========================================================
+    function buildAggregated(){
+      state.aggMap.clear();
+      state.groups = [];
+      state.uniqueX = [];
+      state.subjectsByGroup.clear();
+      state.pointsByGroup.clear();
+      state.selectedByGroup.clear();
+
+      const idCol = state.idCol;
+      const xCol = state.xCol;
+      const gCol = state.gCol;
+      const yVar = state.yVar;
+
+      // Step 1: filter + coerce (drop missing id/x/y; drop missing group if used)
+      const filtered = [];
+      for(const r of state.rawRows){
+        const sid = r[idCol];
+        const xRaw = r[xCol];
+        const yRaw = r[yVar];
+        const gRaw = (gCol === "__NONE__") ? "__ALL__" : r[gCol];
+
+        if(sid === null || sid === undefined || String(sid).trim() === "") continue;
+        if(xRaw === null || xRaw === undefined || String(xRaw).trim() === "") continue;
+        if(gCol !== "__NONE__" && (gRaw === null || gRaw === undefined || String(gRaw).trim() === "")) continue;
+
+        const y = Number(yRaw);
+        if(!Number.isFinite(y)) continue;
+
+        const x = state.xIsNumeric ? Number(xRaw) : String(xRaw);
+        if(state.xIsNumeric && !Number.isFinite(x)) continue;
+
+        const g = (gCol === "__NONE__") ? "__ALL__" : String(gRaw);
+
+        filtered.push({ g, sid: String(sid), x, y });
+      }
+
+      // Step 2: aggregate mean for duplicate rows
+      // key: g||sid||x
+      const tmp = new Map();
+      for(const row of filtered){
+        const key = `${row.g}||${row.sid}||${String(row.x)}`;
+        const cur = tmp.get(key);
+        if(!cur){
+          tmp.set(key, { g: row.g, sid: row.sid, x: row.x, sum: row.y, n: 1 });
+        }else{
+          cur.sum += row.y;
+          cur.n += 1;
+        }
+      }
+
+      // Step 3: finalize points
+      const points = [];
+      for(const [key, v] of tmp.entries()){
+        const mean = v.sum / v.n;
+        const pt = {
+          key,
+          group: v.g,
+          subject: v.sid,
+          x: v.x,
+          meanOrig: mean,
+          mean: mean,
+        };
+        state.aggMap.set(key, pt);
+        points.push(pt);
+      }
+
+      // Step 4: compute groups and X order
+      const groups = uniquePreserveOrder(points.map(p => p.group));
+      state.groups = groups;
+      if(groups.length === 0){
+        return { ok:false, msg:"没有可用于绘图的有效数据行（请检查列选择与缺失值）。" };
+      }
+
+      // uniqueX
+      if(state.xIsNumeric){
+        const xs = Array.from(new Set(points.map(p => p.x)));
+        xs.sort((a,b) => a - b);
+        state.uniqueX = xs;
+      }else{
+        const xs = uniquePreserveOrder(points.map(p => p.x));
+        state.uniqueX = xs;
+      }
+
+      // Step 5: group->subjects, group->points
+      for(const g of groups){
+        const pts = points.filter(p => p.group === g);
+        const subs = uniquePreserveOrder(pts.map(p => p.subject)).sort();
+        state.subjectsByGroup.set(g, subs);
+        state.pointsByGroup.set(g, pts);
+        state.selectedByGroup.set(g, new Set()); // empty initially
+      }
+
+      // default mapping for 2 charts
+      if(state.gCol === "__NONE__" || groups.length === 1){
+        state.gTop = groups[0];
+        state.gBottom = null;
+      }else{
+        state.gTop = groups[0];
+        state.gBottom = groups[1] ?? null;
+      }
+
+      return { ok:true, msg:`已聚合：组数 ${groups.length}，X点数 ${state.uniqueX.length}。` };
+    }
+
+    // ==========================================================
+    // Mean line computation (match python: mean over subjects at each x)
+    // ==========================================================
+    function computeMeanSeries(groupValue){
+      const g = groupValue;
+      const pts = state.pointsByGroup.get(g) || [];
+      const xs = state.uniqueX;
+
+      // subject means already in pts; mean_overall = groupby(time)["mean"].mean()
+      const byX = new Map(); // x -> {sum, n}
+      for(const x of xs){
+        byX.set(String(x), { sum:0, n:0 });
+      }
+      for(const p of pts){
+        const k = String(p.x);
+        const cell = byX.get(k);
+        if(cell){
+          cell.sum += p.mean;
+          cell.n += 1;
+        }
+      }
+      const series = xs.map(x => {
+        const cell = byX.get(String(x));
+        const v = (cell && cell.n > 0) ? (cell.sum / cell.n) : NaN;
+        return { x, y: v };
+      });
+      return series;
+    }
+
+    function getSubjectSeries(groupValue, subject){
+      const pts = state.pointsByGroup.get(groupValue) || [];
+      const xs = state.uniqueX;
+      const map = new Map();
+      for(const p of pts){
+        if(p.subject === subject){
+          map.set(String(p.x), p);
+        }
+      }
+      // allow missing x -> NaN (gap)
+      const series = xs.map(x => {
+        const pt = map.get(String(x));
+        return { x, y: pt ? pt.mean : NaN, pt: pt || null };
+      });
+      return series;
+    }
+
+    // ==========================================================
+    // Logging
+    // ==========================================================
+    function pushLog(entry){
+      state.logs.unshift(entry);
+      if(state.logs.length > 200) state.logs.pop();
+      renderLogs();
+    }
+
+    function renderLogs(){
+      clearNode(el.logBox);
+      for(const it of state.logs){
+        const div = document.createElement('div');
+        div.className = 'logItem';
+        const k = document.createElement('div');
+        k.className = 'k';
+        k.textContent = it.ts;
+        const v = document.createElement('div');
+        v.className = 'v';
+        v.textContent = `${it.group} / ${it.subject} / ${it.x} / ${it.var}: ${it.from} → ${it.to}`;
+        div.appendChild(k);
+        div.appendChild(v);
+        el.logBox.appendChild(div);
+      }
+      if(state.logs.length === 0){
+        const empty = document.createElement('div');
+        empty.className = 'hint';
+        empty.textContent = '暂无记录。';
+        el.logBox.appendChild(empty);
+      }
+    }
+
+    // ==========================================================
+    // Legend (selection)
+    // ==========================================================
+    function toggleSelect(groupValue, subject, additive=false){
+      const set = state.selectedByGroup.get(groupValue);
+      if(!set) return;
+
+      // 统一采用“切换”语义：点击某个被试，仅切换该被试的选中/取消选中状态。
+      // 这允许用户先“全选”，再逐个排除不想显示的被试，而不会把其它选择清空。
+      if(set.has(subject)) set.delete(subject);
+      else set.add(subject);
+    }
+
+    function setSelectAll(groupValue){
+      const subs = state.subjectsByGroup.get(groupValue) || [];
+      const set = state.selectedByGroup.get(groupValue);
+      set.clear();
+      for(const s of subs) set.add(s);
+    }
+
+    function clearSelect(groupValue){
+      const set = state.selectedByGroup.get(groupValue);
+      if(set) set.clear();
+    }
+
+    function selectionLabel(groupValue){
+      const set = state.selectedByGroup.get(groupValue);
+      if(!set || set.size === 0) return "未选择被试";
+      if(set.size === 1) return `选择：${Array.from(set)[0]}`;
+      return `选择：${set.size} 名被试`;
+    }
+
+    function renderLegend(containerEl, groupValue, which){
+      clearNode(containerEl);
+      const subs = state.subjectsByGroup.get(groupValue) || [];
+      const sel = state.selectedByGroup.get(groupValue) || new Set();
+
+      for(const s of subs){
+        const row = document.createElement('div');
+        row.className = 'legendItem' + (sel.has(s) ? ' selected' : '');
+        row.addEventListener('click', (ev) => {
+          const additive = ev.shiftKey;
+          toggleSelect(groupValue, s, additive);
+          refreshAllViews();
+        });
+
+        const left = document.createElement('div');
+        left.className = 'legendLeft';
+        const sw = document.createElement('div');
+        sw.className = 'swatch';
+        sw.style.background = subjectColor(s);
+        sw.style.opacity = sel.has(s) ? '1.0' : '0.85';
+        const name = document.createElement('div');
+        name.className = 'legendName';
+        name.textContent = s;
+        left.appendChild(sw);
+        left.appendChild(name);
+
+        row.appendChild(left);
+        containerEl.appendChild(row);
+      }
+
+      if(subs.length === 0){
+        const empty = document.createElement('div');
+        empty.className = 'hint';
+        empty.textContent = '无被试。';
+        containerEl.appendChild(empty);
+      }
+    }
+
+    // ==========================================================
+    // Chart rendering (D3)
+    // ==========================================================
+    function renderChart(container, groupValue, which){
+      // which: "top" or "bottom"
+      clearNode(container);
+
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+
+      const margin = { top: 16, right: 14, bottom: 42, left: 52 };
+      const w = Math.max(320, width) - margin.left - margin.right;
+      const h = Math.max(240, height) - margin.top - margin.bottom;
+
+      const svg = d3.select(container).append("svg")
+        .attr("width", width)
+        .attr("height", height);
+
+      const g = svg.append("g")
+        .attr("transform", `translate(${margin.left},${margin.top})`);
+
+      const xs = state.uniqueX;
+      const xDomain = xs.map(x => String(x));
+      const xScale = d3.scalePoint()
+        .domain(xDomain)
+        .range([0, w])
+        .padding(0.5);
+
+      // y domain from data in this group
+      const pts = state.pointsByGroup.get(groupValue) || [];
+      const vals = pts.map(p => p.mean).filter(v => Number.isFinite(v));
+      const meanSeries = computeMeanSeries(groupValue);
+      for(const m of meanSeries){
+        if(Number.isFinite(m.y)) vals.push(m.y);
+      }
+      let yMin = d3.min(vals);
+      let yMax = d3.max(vals);
+      if(!Number.isFinite(yMin) || !Number.isFinite(yMax)){
+        yMin = 0; yMax = 1;
+      }
+      if(yMin === yMax){
+        yMin -= 1; yMax += 1;
+      }else{
+        const pad = 0.08 * (yMax - yMin);
+        yMin -= pad; yMax += pad;
+      }
+
+      const yScale = d3.scaleLinear()
+        .domain([yMin, yMax])
+        .range([h, 0])
+        .nice();
+
+      // gridlines
+      const yTicks = yScale.ticks(5);
+      g.append("g")
+        .attr("class","grid")
+        .selectAll("line")
+        .data(yTicks)
+        .join("line")
+        .attr("class","gridline")
+        .attr("x1", 0)
+        .attr("x2", w)
+        .attr("y1", d => yScale(d))
+        .attr("y2", d => yScale(d));
+
+      // axes
+      const xAxis = d3.axisBottom(xScale);
+      const yAxis = d3.axisLeft(yScale).ticks(5);
+
+      g.append("g")
+        .attr("class","axis")
+        .attr("transform", `translate(0,${h})`)
+        .call(xAxis)
+        .selectAll("text")
+        .attr("transform", "rotate(35)")
+        .style("text-anchor","start");
+
+      g.append("g")
+        .attr("class","axis")
+        .call(yAxis);
+
+      // labels
+      const title = `${state.yVar}（${state.gCol === "__NONE__" ? "无分组" : `${state.gCol}=${groupValue}`}）`;
+      g.append("text")
+        .attr("x", 0)
+        .attr("y", -2)
+        .attr("fill","rgba(233,238,246,0.85)")
+        .attr("font-size", 12)
+        .attr("font-weight", 650)
+        .text(title);
+
+      g.append("text")
+        .attr("x", w)
+        .attr("y", h + 36)
+        .attr("fill","rgba(233,238,246,0.70)")
+        .attr("font-size", 11)
+        .attr("text-anchor","end")
+        .text(state.xCol);
+
+      g.append("text")
+        .attr("x", -40)
+        .attr("y", 10)
+        .attr("fill","rgba(233,238,246,0.70)")
+        .attr("font-size", 11)
+        .attr("text-anchor","start")
+        .text(state.yVar);
+
+      const line = d3.line()
+        .defined(d => Number.isFinite(d.y))
+        .x(d => xScale(String(d.x)))
+        .y(d => yScale(d.y));
+
+      const selSet = state.selectedByGroup.get(groupValue) || new Set();
+      const hasSelection = selSet.size > 0;
+
+      // subjects
+      const subs = state.subjectsByGroup.get(groupValue) || [];
+
+      const subjG = g.append("g").attr("class","subjects");
+      for(const s of subs){
+        const series = getSubjectSeries(groupValue, s);
+        const color = subjectColor(s);
+
+        const path = subjG.append("path")
+          .datum(series)
+          .attr("stroke", color)
+          .attr("class", () => {
+            const selected = selSet.has(s);
+            let cls = "line-subject";
+            if(selected) cls += " selected";
+            if(hasSelection && !selected) cls += " dim";
+            return cls;
+          })
+          .attr("d", line)
+          .on("click", (event) => {
+            toggleSelect(groupValue, s, event.shiftKey);
+            refreshAllViews();
+          });
+
+        // points
+        const ptsSel = subjG.selectAll(null)
+          .data(series.filter(d => d.pt && Number.isFinite(d.y)))
+          .enter()
+          .append("circle")
+          .attr("r", () => selSet.has(s) ? 5.2 : 4.0)
+          .attr("fill", color)
+          .attr("class", () => {
+            const selected = selSet.has(s);
+            let cls = "pt-subject";
+            if(selected) cls += " selected";
+            if(hasSelection && !selected) cls += " dim";
+            return cls;
+          })
+          .attr("cx", d => xScale(String(d.x)))
+          .attr("cy", d => yScale(d.y))
+          .call(
+            d3.drag()
+              .on("start", function(){ d3.select(this).raise(); })
+              .on("drag", function(event, d){
+                const pt = d.pt;
+                if(!pt) return;
+
+                const [, my] = d3.pointer(event.sourceEvent, g.node());
+                const newY = yScale.invert(my);
+                // clamp
+                const yClamped = Math.max(yScale.domain()[0], Math.min(yScale.domain()[1], newY));
+                const old = pt.mean;
+
+                pt.mean = yClamped;
+
+                // update this circle
+                d3.select(this).attr("cy", yScale(pt.mean));
+
+                // update subject path (only this subject)
+                const newSeries = getSubjectSeries(groupValue, s);
+                path.datum(newSeries).attr("d", line);
+
+                // update mean line
+                updateMeanLine();
+
+                // update description (cheap but acceptable for typical sample sizes)
+                updateDescriptionPanel();
+
+                // update pills
+                updateSelectionPills();
+
+                // log (throttle by comparing change)
+                if(Number.isFinite(old) && Math.abs(old - yClamped) > 1e-9){
+                  pushLog({
+                    ts: new Date().toLocaleString(),
+                    group: groupValue,
+                    subject: s,
+                    x: d.x,
+                    var: state.yVar,
+                    from: round3(old),
+                    to: round3(yClamped),
+                  });
+                }
+              })
+          );
+      }
+
+      // mean line + points
+      const meanG = g.append("g").attr("class","mean");
+      const meanPath = meanG.append("path").attr("class","line-mean");
+      const meanPtsG = meanG.append("g");
+
+      function updateMeanLine(){
+        const ms = computeMeanSeries(groupValue);
+        meanPath.datum(ms).attr("d", line);
+
+        const mp = meanPtsG.selectAll("circle")
+          .data(ms.filter(d => Number.isFinite(d.y)), d => String(d.x));
+
+        mp.join(
+          enter => enter.append("circle")
+            .attr("class","pt-mean")
+            .attr("r", 4.2)
+            .attr("cx", d => xScale(String(d.x)))
+            .attr("cy", d => yScale(d.y)),
+          update => update
+            .attr("cx", d => xScale(String(d.x)))
+            .attr("cy", d => yScale(d.y)),
+          exit => exit.remove()
+        );
+      }
+      updateMeanLine();
+    }
+
+    // ==========================================================
+    // Description panel
+    // ==========================================================
+    function renderDescTabs(groups){
+      clearNode(el.descTabs);
+      if(groups.length === 0) return;
+
+      // 若无分组：仅 "__ALL__"
+      for(const g of groups){
+        const btn = document.createElement('button');
+        btn.className = 'tab' + (state.descActiveGroup === g ? ' on' : '');
+        btn.textContent = (state.gCol === "__NONE__" ? "ALL" : String(g));
+        btn.addEventListener('click', () => {
+          state.descActiveGroup = g;
+          refreshAllViews();
+        });
+        el.descTabs.appendChild(btn);
+      }
+    }
+
+    function updateDescriptionPanel(){
+      const groups = (state.gCol === "__NONE__") ? [state.gTop] : [state.gTop, state.gBottom].filter(Boolean);
+      if(!groups.length) return;
+      if(!state.descActiveGroup || !groups.includes(state.descActiveGroup)){
+        state.descActiveGroup = groups[0];
+      }
+      renderDescTabs(groups);
+
+      const g = state.descActiveGroup;
+      const subs = state.subjectsByGroup.get(g) || [];
+      const xs = state.uniqueX;
+
+      // Build subject x-value table
+      // Row: subject, v_x1..v_xk, subj_mean, subj_var
+      const rows = [];
+      for(const s of subs){
+        const series = getSubjectSeries(g, s);
+        const vals = series.map(d => Number.isFinite(d.y) ? d.y : NaN);
+        const valsFinite = vals.filter(v => Number.isFinite(v));
+        const m = valsFinite.length ? (valsFinite.reduce((a,b)=>a+b,0) / valsFinite.length) : NaN;
+        const v = computeVariance(valsFinite);
+        const row = { subject: s, values: vals, mean: m, var: v };
+        rows.push(row);
+      }
+
+      // group mean at each x (mean over subjects' values at that x)
+      const meanAtX = [];
+      const varAtX = [];
+      for(let i=0;i<xs.length;i++){
+        const colVals = rows.map(r => r.values[i]).filter(v => Number.isFinite(v));
+        const m = colVals.length ? (colVals.reduce((a,b)=>a+b,0) / colVals.length) : NaN;
+        const v = computeVariance(colVals);
+        meanAtX.push(m);
+        varAtX.push(v);
+      }
+
+      // group overall mean/var across subjects means (align with python "mean over subjects" logic)
+      const subjMeans = rows.map(r => r.mean).filter(v => Number.isFinite(v));
+      const overallMean = subjMeans.length ? subjMeans.reduce((a,b)=>a+b,0) / subjMeans.length : NaN;
+      const overallVar = computeVariance(subjMeans);
+
+      // render table
+      const thead = el.descTable.querySelector('thead');
+      const tbody = el.descTable.querySelector('tbody');
+      clearNode(thead);
+      clearNode(tbody);
+
+      // header
+      const trh = document.createElement('tr');
+      const h1 = document.createElement('th'); h1.textContent = state.idCol;
+      trh.appendChild(h1);
+      for(const x of xs){
+        const th = document.createElement('th');
+        th.textContent = `${state.xCol}=${x}`;
+        trh.appendChild(th);
+      }
+      const hm = document.createElement('th'); hm.textContent = "subject_mean";
+      const hv = document.createElement('th'); hv.textContent = "subject_var";
+      trh.appendChild(hm); trh.appendChild(hv);
+      thead.appendChild(trh);
+
+      // subject rows
+      for(const r of rows){
+        const tr = document.createElement('tr');
+        const td0 = document.createElement('td'); td0.textContent = r.subject;
+        tr.appendChild(td0);
+        for(const v of r.values){
+          const td = document.createElement('td');
+          td.textContent = round3(v);
+          tr.appendChild(td);
+        }
+        const tdm = document.createElement('td'); tdm.textContent = round3(r.mean);
+        const tdv = document.createElement('td'); tdv.textContent = round3(r.var);
+        tr.appendChild(tdm); tr.appendChild(tdv);
+        tbody.appendChild(tr);
+      }
+
+      // summary rows
+      const mkSummaryRow = (label, arr, m, v) => {
+        const tr = document.createElement('tr');
+        const td0 = document.createElement('td');
+        td0.textContent = label;
+        td0.style.fontWeight = "700";
+        td0.style.color = "rgba(74,210,149,0.95)";
+        tr.appendChild(td0);
+        for(const x of arr){
+          const td = document.createElement('td');
+          td.textContent = round3(x);
+          td.style.color = "rgba(74,210,149,0.92)";
+          tr.appendChild(td);
+        }
+        const tdm = document.createElement('td'); tdm.textContent = round3(m);
+        const tdv = document.createElement('td'); tdv.textContent = round3(v);
+        tdm.style.color = "rgba(74,210,149,0.92)";
+        tdv.style.color = "rgba(74,210,149,0.92)";
+        tr.appendChild(tdm); tr.appendChild(tdv);
+        return tr;
+      };
+
+      tbody.appendChild(mkSummaryRow("GROUP_MEAN_AT_X", meanAtX, overallMean, overallVar));
+      tbody.appendChild(mkSummaryRow("GROUP_VAR_AT_X", varAtX, NaN, NaN));
+      el.pillDesc.textContent = `${state.gCol === "__NONE__" ? "ALL" : g} · 被试数 ${subs.length} · X点数 ${xs.length}`;
+    }
+
+    // ==========================================================
+    // Full refresh
+    // ==========================================================
+    function updateSelectionPills(){
+      const gt = state.gTop;
+      const gb = state.gBottom;
+
+      if(gt){
+        el.pillTopSel.textContent = selectionLabel(gt);
+      }else{
+        el.pillTopSel.textContent = "未选择被试";
+      }
+
+      if(gb){
+        el.pillBottomSel.textContent = selectionLabel(gb);
+      }else{
+        el.pillBottomSel.textContent = "未选择被试";
+      }
+    }
+
+    function refreshAllViews(){
+      // layout for bottom panel based on grouping
+      const useTwo = (state.gCol !== "__NONE__") && state.gTop && state.gBottom && (state.gTop !== state.gBottom);
+
+      el.bottomChartPanel.style.display = useTwo ? "block" : "none";
+      el.bottomLegendPanel.style.display = useTwo ? "block" : "none";
+
+      if(state.gTop){
+        el.pillTop.textContent = (state.gCol === "__NONE__") ? "ALL" : String(state.gTop);
+        renderChart(el.chartTop, state.gTop, "top");
+        renderLegend(el.legendTop, state.gTop, "top");
+      }
+      if(useTwo && state.gBottom){
+        el.pillBottom.textContent = String(state.gBottom);
+        renderChart(el.chartBottom, state.gBottom, "bottom");
+        renderLegend(el.legendBottom, state.gBottom, "bottom");
+      }
+
+      updateSelectionPills();
+      updateDescriptionPanel();
+    }
+
+    // ==========================================================
+    // Group mapping UI
+    // ==========================================================
+    function populateGroupMapping(){
+      clearNode(el.gTop);
+      clearNode(el.gBottom);
+      for(const g of state.groups){
+        el.gTop.appendChild(mkOption(g));
+        el.gBottom.appendChild(mkOption(g));
+      }
+      if(state.gTop) el.gTop.value = state.gTop;
+      if(state.gBottom) el.gBottom.value = state.gBottom;
+
+      if(state.gCol === "__NONE__" || state.groups.length <= 1){
+        el.groupMapping.style.display = "none";
+      }else{
+        el.groupMapping.style.display = "block";
+      }
+    }
+
+    // ==========================================================
+    // Parse + draw pipeline
+    // ==========================================================
+    function parseOnly(){
+      // 1) parse text
+      const text = (el.rawTextarea.value || "").trim();
+      if(!text){
+        setStatus("原始数据为空。", "err");
+        return false;
+      }
+      const { rows, err } = parseTextToRows(text);
+      if(err){
+        setStatus(`解析失败：${err}`, "err");
+        return false;
+      }
+      if(!rows.length){
+        setStatus("解析结果为空（可能缺少表头或分隔符错误）。", "err");
+        return false;
+      }
+
+      state.rawText = text;
+      state.rawRows = rows;
+      state.cols = rows.columns || Object.keys(rows[0] || {});
+      state.cols = state.cols.filter(c => c !== "" && c !== null && c !== undefined);
+
+      if(state.cols.length === 0){
+        setStatus("未识别到列名。", "err");
+        return false;
+      }
+
+      renderRawPreview(rows, state.cols);
+      // 重要：populateSettings 会保留用户的当前选择，不会刷回默认
+      populateSettings(state.cols);
+
+      setStatus(`已读取：${rows.length} 行，${state.cols.length} 列。`, "ok");
+      return true;
+    }
+
+    function recomputeAndDraw(){
+      if(!state.rawRows.length || !state.cols.length){
+        setStatus("尚未解析数据。请先点击“解析并绘图”。", "err");
+        return;
+      }
+
+      // 2) read settings
+      readSettingsFromUI();
+      const { errs, warns } = validateSettings();
+
+      if(errs.length){
+        el.settingsWarn.style.display = "block";
+        el.settingsWarn.textContent = "设定错误：\n- " + errs.join("\n- ");
+        setStatus("数据设定存在错误，无法绘图。", "err");
+        return;
+      }else{
+        el.settingsWarn.style.display = warns.length ? "block" : "none";
+        el.settingsWarn.textContent = warns.length ? ("注意：\n- " + warns.join("\n- ")) : "";
+      }
+
+      // 3) aggregate
+      const res = buildAggregated();
+      if(!res.ok){
+        setStatus(res.msg, "err");
+        return;
+      }
+
+      // update group mapping
+      populateGroupMapping();
+      if(state.gTop) el.gTop.value = state.gTop;
+      if(state.gBottom) el.gBottom.value = state.gBottom;
+
+      // 4) update pills & draw
+      el.pillMeta.textContent = `聚合后：组数 ${state.groups.length}，X点数 ${state.uniqueX.length}`;
+      setStatus(res.msg, "ok");
+      el.pillTop.textContent = (state.gCol === "__NONE__") ? "ALL" : String(state.gTop);
+      el.pillBottom.textContent = state.gBottom ? String(state.gBottom) : "—";
+      el.pillDesc.textContent = "已载入";
+
+      refreshAllViews();
+    }
+
+    // ==========================================================
+    // UI events
+    // ==========================================================
+    el.btnUpload.addEventListener('click', () => el.fileInput.click());
+    el.fileInput.addEventListener('change', async () => {
+      const f = el.fileInput.files && el.fileInput.files[0];
+      if(!f) return;
+      const txt = await f.text();
+      el.rawTextarea.value = txt;
+      setStatus(`已载入文件：${f.name}（${f.size} bytes）。点击“解析并绘图”。`, "ok");
+    });
+
+    el.btnExample.addEventListener('click', () => {
+      el.rawTextarea.value = EXAMPLE_CSV;
+      setStatus("已填入示例数据。点击“解析并绘图”。", "ok");
+    });
+
+    el.btnClear.addEventListener('click', () => {
+      el.rawTextarea.value = "";
+      renderRawPreview([], []);
+      setStatus("已清空。", "");
+    });
+
+    el.btnParse.addEventListener('click', () => {
+      // 先解析原始文本，再根据当前设定重算聚合并绘图
+      const ok = parseOnly();
+      if(ok) recomputeAndDraw();
+    });
+
+    el.btnReset.addEventListener('click', () => {
+      // 彻底重置（毕竟人类总喜欢把状态弄成一团）
+      state.rawText = "";
+      state.rawRows = [];
+      state.cols = [];
+      state.aggMap.clear();
+      state.groups = [];
+      state.uniqueX = [];
+      state.subjectsByGroup.clear();
+      state.pointsByGroup.clear();
+      state.selectedByGroup.clear();
+      state.logs = [];
+      state.descActiveGroup = null;
+
+      el.rawTextarea.value = "";
+      renderRawPreview([], []);
+      clearNode(el.idCol); clearNode(el.xCol); clearNode(el.gCol); clearNode(el.yVar);
+      clearNode(el.legendTop); clearNode(el.legendBottom);
+      clearNode(el.descTabs);
+      clearNode(el.descTable.querySelector('thead'));
+      clearNode(el.descTable.querySelector('tbody'));
+      clearNode(el.chartTop); clearNode(el.chartBottom);
+
+      el.pillMeta.textContent = "未载入数据";
+      el.pillTop.textContent = "等待数据";
+      el.pillBottom.textContent = "等待数据";
+      el.pillDesc.textContent = "等待数据";
+      el.pillTopSel.textContent = "未选择被试";
+      el.pillBottomSel.textContent = "未选择被试";
+      el.settingsWarn.style.display = "none";
+      el.groupMapping.style.display = "none";
+      el.bottomChartPanel.style.display = "block";
+      el.bottomLegendPanel.style.display = "block";
+
+      renderLogs();
+      setStatus("已重置。", "");
+    });
+
+    el.btnClearLog.addEventListener('click', () => {
+      state.logs = [];
+      renderLogs();
+    });
+
+    // settings changes -> redraw
+    for(const s of [el.idCol, el.xCol, el.gCol, el.yVar]){
+      s.addEventListener('change', () => {
+        if(!state.rawRows.length) return;
+        readSettingsFromUI();
+        const { errs, warns } = validateSettings();
+        if(errs.length){
+          el.settingsWarn.style.display = "block";
+          el.settingsWarn.textContent = "设定错误：\n- " + errs.join("\n- ");
+          setStatus("数据设定存在错误，无法绘图。", "err");
+          return;
+        }
+        el.settingsWarn.style.display = warns.length ? "block" : "none";
+        el.settingsWarn.textContent = warns.length ? ("注意：\n- " + warns.join("\n- ")) : "";
+        recomputeAndDraw();
+      });
+    }
+
+    // group mapping changes
+    el.gTop.addEventListener('change', () => {
+      state.gTop = el.gTop.value;
+      refreshAllViews();
+    });
+    el.gBottom.addEventListener('change', () => {
+      state.gBottom = el.gBottom.value;
+      refreshAllViews();
+    });
+
+    // Legend buttons
+    el.btnTopAll.addEventListener('click', () => { if(state.gTop){ setSelectAll(state.gTop); refreshAllViews(); } });
+    el.btnTopNone.addEventListener('click', () => { if(state.gTop){ clearSelect(state.gTop); refreshAllViews(); } });
+    el.btnBottomAll.addEventListener('click', () => { if(state.gBottom){ setSelectAll(state.gBottom); refreshAllViews(); } });
+    el.btnBottomNone.addEventListener('click', () => { if(state.gBottom){ clearSelect(state.gBottom); refreshAllViews(); } });
+
+    // init logs
+    renderLogs();
+  </script>
+</body>
+</html>
+"""
+
+out_path = Path("/mnt/data/repeated_measures_viz.html")
+out_path.write_text(html, encoding="utf-8")
+str(out_path)

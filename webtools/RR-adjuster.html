@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RR 间隔工具 (修复选区与快捷键)</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-dragdata@2.2.3/dist/chartjs-plugin-dragdata.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background-color: #f5f5f5; color: #333; height: 100vh; overflow: hidden; box-sizing: border-box; }
+        
+        .container { 
+            max-width: 1400px; margin: 0 auto; display: grid; grid-template-columns: 320px 1fr; gap: 20px; 
+            height: calc(100vh - 40px); 
+        }
+        
+        .sidebar { display: flex; flex-direction: column; gap: 10px; height: 100%; overflow: hidden; }
+        
+        .input-box { 
+            width: 100%; flex-grow: 1; overflow-y: auto; padding: 10px; 
+            font-family: monospace; border: 1px solid #ccc; border-radius: 5px; 
+            background-color: white; white-space: pre; box-sizing: border-box;
+            font-size: 13px; line-height: 1.5;
+        }
+        .input-box:focus { outline: 2px solid #28a745; border-color: transparent; }
+
+        .btn-group { display: flex; gap: 10px; align-items: center; flex-shrink: 0;}
+        button { padding: 8px 12px; background-color: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 14px;}
+        button:hover { background-color: #1e7e34; }
+        button.secondary { background-color: #6c757d; }
+        button.secondary:hover { background-color: #545b62; }
+
+        .main-content { display: flex; flex-direction: column; gap: 15px; height: 100%; overflow: hidden;}
+        
+        .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; flex-shrink: 0; }
+        .card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); text-align: center; }
+        .card h3 { margin: 0 0 5px 0; font-size: 14px; color: #666; }
+        .card .value { font-size: 24px; font-weight: bold; color: #28a745; }
+        
+        .chart-container { 
+            background: white; padding: 10px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); 
+            display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative;
+        }
+        
+        /* 这里的 relative 非常重要，用于定位选区框 */
+        .canvas-wrapper {
+            position: relative;
+            width: 100%; height: 100%; flex-grow: 1; overflow: hidden; cursor: crosshair;
+        }
+        .pan-bar {
+            margin-top: 6px;
+            padding: 4px 8px 2px 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+        }
+        .pan-bar input[type="range"] {
+            flex: 1;
+        }
+        
+        /* 选区框样式优化 */
+        #selection-box {
+            position: absolute;
+            background: rgba(40, 167, 69, 0.2); /* 改为绿色系的半透明 */
+            border: 1px solid #28a745;
+            display: none;
+            pointer-events: none; /* 让鼠标事件穿透，不阻挡鼠标抬起检测 */
+            z-index: 100;
+        }
+        
+        .controls { display: flex; align-items: center; gap: 15px; padding: 8px; background: #e9ecef; border-radius: 5px; font-size: 14px; flex-shrink: 0; margin-bottom: 10px;}
+        .key-hint { font-size: 12px; color: #333; background: #fff; padding: 2px 6px; border-radius: 4px; border: 1px solid #ccc; font-weight: bold; box-shadow: 0 1px 2px rgba(0,0,0,0.1);}
+        input[type="checkbox"] { transform: scale(1.2); cursor: pointer; }
+        .mode-group { display: flex; align-items: center; gap: 6px; }
+        .zoom-group { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+        .zoom-group input[type="range"] { width: 140px; }
+        .zoom-group input[type="number"] { width: 60px; padding: 2px 4px; font-size: 12px; }
+        .mode-btn { padding: 4px 10px; font-size: 12px; background-color: #6c757d; color: #fff; border-radius: 4px; border: none; cursor: pointer; font-weight: 500; }
+        .mode-btn.active { background-color: #28a745; }
+        .selected-box {
+            width: 100%;
+            max-height: 140px;
+            overflow-y: auto;
+            padding: 8px;
+            font-family: monospace;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #fff;
+            font-size: 12px;
+            line-height: 1.4;
+            white-space: pre;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="sidebar">
+        <h3>RR 数据列表</h3>
+        <div id="rrInput" class="input-box" contenteditable="true" spellcheck="false"></div>
+        <div class="btn-group">
+            <button onclick="loadDataFromInput()">重置/加载</button>
+            <button class="secondary" onclick="clearSelection()">清除选中</button>
+        </div>
+
+        <div style="margin-top: 6px; flex-shrink: 0;">
+            <h4 style="margin: 0 0 4px 0; font-size: 13px; font-weight: bold; color: #333;">选中数据</h4>
+            <div id="selectedInfo" class="selected-box">（无选中点）</div>
+        </div>
+
+        <div style="font-size: 12px; color: #666; line-height: 1.6; flex-shrink: 0; margin-top: 8px;">
+            <b>操作指南：</b><br>
+            1. <b>框选</b>：勾选右上方框选模式，在空白区域鼠标左键拖拽。<br>
+            2. <b>加选</b>：按住 <span class="key-hint">Shift</span> 点击点。<br>
+            3. <b>减选</b>：按住 <span class="key-hint">Alt</span> 点击点。<br>
+            4. <b>移动/缩放/旋转</b>：在顶部选择对应模式后，拖动<span style="color:#6f42c1; font-weight:bold;">紫色</span>点进行操作。<br>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="cards">
+            <div class="card">
+                <h3>RMSSD (ms)</h3>
+                <div id="val-rmssd" class="value">--</div>
+            </div>
+            <div class="card">
+                <h3>HF Log (ln ms²)</h3>
+                <div id="val-hf" class="value">--</div>
+            </div>
+            <div class="card">
+                <h3>Mean HR (bpm)</h3>
+                <div id="val-hr" class="value">--</div>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <div class="controls">
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 5px; font-weight: bold;">
+                    <input type="checkbox" id="chk-selection-mode"> 启用框选模式
+                </label>
+                <div style="border-left: 1px solid #ccc; height: 20px; margin: 0 5px;"></div>
+
+                <div class="mode-group">
+                    <span>操作模式:</span>
+                    <button type="button" class="mode-btn active" data-mode="move">移动</button>
+                    <button type="button" class="mode-btn" data-mode="scale">缩放</button>
+                    <button type="button" class="mode-btn" data-mode="rotate">旋转</button>
+                </div>
+
+                <div class="zoom-group">
+                    <span>时间缩放:</span>
+                    <input type="range" id="zoom-slider" min="0" max="100" step="1" value="50">
+                    <input type="number" id="zoom-input" step="0.1" value="1">
+                </div>
+
+                <div style="flex: 1;"></div>
+
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" id="chk-show-lines"> 显示 RR 连线
+                </label>
+            </div>
+
+            <div class="canvas-wrapper">
+                <canvas id="rrChart"></canvas>
+                <div id="selection-box"></div>
+            </div>
+            <div class="pan-bar">
+                <span>时间视图位置:</span>
+                <input type="range" id="pan-slider" min="0" max="100" step="1" value="50">
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const defaultData = `时间, rr_ms
+173336.98531423774,970.0
+173337.92722545844,939.0
+173338.96522556542,1032.0
+173339.92626749293,953.0
+173340.9347449425,1010.0
+173341.95286403943,1041
+173342.92862473792,977.0
+173343.84353171667,916.0
+173344.83222137787,990.0
+173346.77706729303,932.0
+173347.69071852113,915.0
+173348.67038618488,981.0
+173349.69148527563,1022.0
+173350.6286929746,936.0
+173351.5741778514,946.0
+173352.5436690949,970.0
+173353.51497017388,988
+173354.41039906998,896.0
+173355.38317905937,955
+173356.42148100428,1039.0
+173357.40501843998,977
+173358.40541063872,992.0
+173359.46321999177,1059.0
+173360.49118124606,1029.0
+173361.40454613345,915.0`;
+
+    const COLOR_DEFAULT = '#28a745'; 
+    const COLOR_EDITED = 'red';      
+    const COLOR_SELECTED = '#6f42c1'; 
+
+    const MODE_MOVE = 'move';
+    const MODE_SCALE = 'scale';
+    const MODE_ROTATE = 'rotate';
+
+    // 缩放相关常量与状态
+    const MIN_ZOOM = 0.05;   // 最小缩放因子（时间跨度放大）
+    const MAX_ZOOM = 100.0;   // 最大缩放因子（时间跨度缩小）
+    let xZoom = 1.0;        // 当前横向缩放因子
+    let panPos = 0.5;       // 当前视图中心在全局时间范围中的相对位置 [0,1]
+
+    let currentMode = MODE_MOVE;
+
+    let myChart = null;
+    let currentData = []; 
+    let selectedIndices = new Set(); 
+    let showLines = false; // 控制是否显示 RR 连线
+
+    // 框选相关变量
+    let isSelecting = false;
+    let startX = 0, startY = 0;
+    const selectionBox = document.getElementById('selection-box');
+    const canvas = document.getElementById('rrChart');
+    const canvasWrapper = document.querySelector('.canvas-wrapper');
+
+    let dragStartValue = 0;
+    let dragOriginalYs = null;
+    let dragCenter = null;
+    let dragActiveIndex = null;
+
+    function sliderToZoom(sliderValue) {
+        const t = sliderValue / 100; // [0,1]
+        if (t <= 0.5) {
+            // 左侧：MIN_ZOOM → 1 线性变化
+            const t2 = t / 0.5;
+            return MIN_ZOOM + (1 - MIN_ZOOM) * t2;
+        } else {
+            // 右侧：1 → MAX_ZOOM 线性变化
+            const t2 = (t - 0.5) / 0.5;
+            return 1 + (MAX_ZOOM - 1) * t2;
+        }
+    }
+
+    function zoomToSlider(zoom) {
+        const z = Math.min(Math.max(zoom, MIN_ZOOM), MAX_ZOOM);
+        if (z <= 1) {
+            const t2 = (z - MIN_ZOOM) / (1 - MIN_ZOOM); // [0,1]
+            return t2 * 50;
+        } else {
+            const t2 = (z - 1) / (MAX_ZOOM - 1); // [0,1]
+            return 50 + t2 * 50;
+        }
+    }
+
+    function applyViewWindow() {
+        if (!myChart || !currentData || currentData.length === 0) return;
+        const xVals = currentData.map(d => d.x);
+        const fullMin = Math.min(...xVals);
+        const fullMax = Math.max(...xVals);
+        const baseSpan = Math.max(fullMax - fullMin, 1e-6);
+
+        const z = Math.min(Math.max(xZoom, MIN_ZOOM), MAX_ZOOM);
+        let span = baseSpan / z;
+
+        // 当请求的跨度不小于全局范围时，退回显示全范围，平移位置失效
+        if (span >= baseSpan) {
+            myChart.options.scales.x.min = fullMin;
+            myChart.options.scales.x.max = fullMax;
+        } else {
+            // 允许的中心位置范围
+            const minCenter = fullMin + span / 2;
+            const maxCenter = fullMax - span / 2;
+            const clampedPan = Math.min(Math.max(panPos, 0), 1);
+            const center = minCenter + (maxCenter - minCenter) * clampedPan;
+
+            const min = center - span / 2;
+            const max = center + span / 2;
+            myChart.options.scales.x.min = min;
+            myChart.options.scales.x.max = max;
+        }
+
+        myChart.update('none');
+    }
+
+    function applyXZoom() {
+        applyViewWindow();
+    }
+
+    function updateSelectedInfo() {
+        const box = document.getElementById('selectedInfo');
+        if (!box) return;
+        if (selectedIndices.size === 0) {
+            box.textContent = '（无选中点）';
+            return;
+        }
+        const lines = ['时间, rr_ms'];
+        const indices = Array.from(selectedIndices).sort((a, b) => a - b);
+        indices.forEach(idx => {
+            const p = currentData[idx];
+            lines.push(`${p.x},${p.y}`);
+        });
+        box.textContent = lines.join('\n');
+    }
+
+    function initChart() {
+        const ctx = canvas.getContext('2d');
+        document.getElementById('rrInput').innerText = defaultData;
+
+        // 【关键修复1】
+        // 直接在 canvas 上用捕获阶段监听鼠标事件，避免被 Chart.js / dragData 抢走事件
+        canvas.addEventListener('mousedown', handleMouseDown, { capture: true });
+        // mousemove 和 mouseup 绑定在 window 上（捕获阶段），确保鼠标移出区域也能响应
+        window.addEventListener('mousemove', handleMouseMove, { capture: true });
+        window.addEventListener('mouseup', handleMouseUp, { capture: true });
+
+        // 当勾选/取消“启用框选模式”时，更新光标样式并清理残留状态
+        const selectionModeCheckbox = document.getElementById('chk-selection-mode');
+        selectionModeCheckbox.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                canvasWrapper.style.cursor = 'crosshair';
+            } else {
+                canvasWrapper.style.cursor = 'default';
+                isSelecting = false;
+                selectionBox.style.display = 'none';
+            }
+        });
+        const linesCheckbox = document.getElementById('chk-show-lines');
+        linesCheckbox.addEventListener('change', (e) => {
+            showLines = e.target.checked;
+            // 交给自定义插件在 afterDatasetsDraw 中根据 showLines 画或不画连线
+            if (myChart) {
+                myChart.update('none');
+            }
+        });
+
+        // 操作模式按钮：移动 / 缩放 / 旋转
+        document.querySelectorAll('.mode-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const mode = btn.getAttribute('data-mode');
+                currentMode = mode;
+                document.querySelectorAll('.mode-btn').forEach(b => {
+                    b.classList.toggle('active', b === btn);
+                });
+            });
+        });
+
+        // 时间缩放控件：滑块 + 精确输入框
+        const zoomSlider = document.getElementById('zoom-slider');
+        const zoomInput = document.getElementById('zoom-input');
+
+        if (zoomSlider && zoomInput) {
+            // 初始化为 1:1
+            xZoom = 1.0;
+            zoomSlider.value = String(zoomToSlider(xZoom));
+            zoomInput.value = String(xZoom);
+
+            zoomSlider.addEventListener('input', (e) => {
+                const sliderVal = parseFloat(e.target.value) || 50;
+                xZoom = sliderToZoom(sliderVal);
+                zoomInput.value = xZoom.toFixed(2).replace(/\.00$/, '');
+                applyXZoom();
+            });
+
+            zoomInput.addEventListener('change', (e) => {
+                let val = parseFloat(e.target.value);
+                if (!isFinite(val) || val <= 0) {
+                    val = 1.0;
+                }
+                val = Math.min(Math.max(val, MIN_ZOOM), MAX_ZOOM);
+                xZoom = val;
+                zoomInput.value = xZoom.toFixed(2).replace(/\.00$/, '');
+                zoomSlider.value = String(zoomToSlider(xZoom));
+                applyXZoom();
+            });
+        }
+
+        // 时间平移控件：底部视图位置滑块
+        const panSlider = document.getElementById('pan-slider');
+        if (panSlider) {
+            panSlider.value = '50';
+            panPos = 0.5;
+
+            panSlider.addEventListener('input', (e) => {
+                const v = parseFloat(e.target.value);
+                if (!isFinite(v)) return;
+                panPos = Math.min(Math.max(v / 100, 0), 1);
+                applyViewWindow();
+            });
+        }
+
+        // 自定义连线插件，作为 Chart.js 插件而非 options.plugins 配置项
+        const rrGuideLinePlugin = {
+            id: 'rrGuideLine',
+            // 在所有数据集画完之后，根据当前点的位置，用极细半透明连线
+            afterDatasetsDraw(chart, args, pluginOptions) {
+                if (!showLines) return;
+                const meta = chart.getDatasetMeta(0);
+                const points = meta && meta.data ? meta.data : [];
+                if (!points || points.length < 2) return;
+
+                const ctx = chart.ctx;
+                ctx.save();
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = 'rgba(40,167,69,0.25)'; // 半透明绿色
+                ctx.beginPath();
+                let moved = false;
+                for (let i = 0; i < points.length; i++) {
+                    const p = points[i];
+                    if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || isNaN(p.x) || isNaN(p.y)) {
+                        continue;
+                    }
+                    if (!moved) {
+                        ctx.moveTo(p.x, p.y);
+                        moved = true;
+                    } else {
+                        ctx.lineTo(p.x, p.y);
+                    }
+                }
+                if (moved) {
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
+        };
+
+        const options = {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'RR Intervals',
+                    data: [],
+                    pointBackgroundColor: [],
+                    pointBorderColor: 'transparent',
+                    pointRadius: 6,
+                    pointHoverRadius: 9,
+                    showLine: false,  // 数据集本身不画线，由自定义插件负责连线
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false,
+                scales: {
+                    x: { type: 'linear', title: { display: true, text: 'Time (s)' }, ticks: { callback: v => v.toFixed(1) } },
+                    y: { title: { display: true, text: 'RR Interval (ms)' }, min: 400, max: 1500 }
+                },
+                plugins: {
+                    tooltip: {
+                        enabled: false
+                    },
+                    dragData: {
+                        round: 0,
+                        showTooltip: false,
+                        dragX: false,
+                        onDragStart: function(e, datasetIndex, index, value) {
+                            const event = e;
+                            const isAlreadySelected = selectedIndices.has(index);
+
+                            if (event.shiftKey) {
+                                selectedIndices.add(index);
+                            } else if (event.altKey || event.metaKey) {
+                                selectedIndices.delete(index);
+                            } else {
+                                if (!isAlreadySelected) {
+                                    selectedIndices.clear();
+                                    selectedIndices.add(index);
+                                }
+                            }
+
+                            if (selectedIndices.size === 0) {
+                                selectedIndices.add(index);
+                            }
+
+                            updatePointColors();
+                            updateInputText();
+
+                            dragStartValue = currentData[index].y;
+                            dragActiveIndex = index;
+                            dragOriginalYs = {};
+                            let sumX = 0;
+                            let sumY = 0;
+                            let count = 0;
+                            selectedIndices.forEach(idx => {
+                                dragOriginalYs[idx] = currentData[idx].y;
+                                sumX += currentData[idx].x;
+                                sumY += currentData[idx].y;
+                                count += 1;
+                            });
+                            if (count > 0) {
+                                dragCenter = { x: sumX / count, y: sumY / count };
+                            } else {
+                                dragCenter = null;
+                            }
+                        },
+                        onDrag: function(e, datasetIndex, index, value) {
+                            e.target.style.cursor = 'grabbing';
+
+                            if (!selectedIndices.has(index)) return;
+
+                            // 若选中点不足 2 个，则统一退化为移动模式
+                            const effMode = (selectedIndices.size >= 2) ? currentMode : MODE_MOVE;
+
+                            if (effMode === MODE_MOVE || !dragCenter || !dragOriginalYs) {
+                                const delta = value.y - dragStartValue;
+                                selectedIndices.forEach(idx => {
+                                    if (idx !== index) {
+                                        currentData[idx].y += delta;
+                                    }
+                                });
+                                dragStartValue = value.y;
+                            } else if (effMode === MODE_SCALE) {
+                                const centerY = dragCenter.y;
+                                const y0_old = dragOriginalYs[index];
+                                const y0_new = value.y;
+                                let s = 1.0;
+                                const denom = y0_old - centerY;
+                                if (Math.abs(denom) > 1e-6) {
+                                    s = (y0_new - centerY) / denom;
+                                }
+                                selectedIndices.forEach(idx => {
+                                    const y_old = dragOriginalYs[idx];
+                                    currentData[idx].y = centerY + (y_old - centerY) * s;
+                                });
+                            } else if (effMode === MODE_ROTATE) {
+                                const xc = dragCenter.x;
+                                const x0 = currentData[index].x;
+                                const dx0 = x0 - xc;
+                                const y0_old = dragOriginalYs[index];
+                                const y0_new = value.y;
+                                let k = 0.0;
+                                if (Math.abs(dx0) > 1e-6) {
+                                    const dy_main = (y0_new - y0_old) * 0.1;
+                                    k = dy_main / dx0;
+                                }
+                                selectedIndices.forEach(idx => {
+                                    const dx = currentData[idx].x - xc;
+                                    const y_old = dragOriginalYs[idx];
+                                    currentData[idx].y = y_old + k * dx;
+                                });
+                            }
+
+                            myChart.data.datasets[0].data = currentData;
+                            myChart.update('none');
+                        },
+                        onDragEnd: function(e, datasetIndex, index, value) {
+                            e.target.style.cursor = 'default';
+                            if (selectedIndices.size > 0) {
+                                selectedIndices.forEach(idx => {
+                                    currentData[idx].edited = true;
+                                });
+                            } else {
+                                currentData[index].edited = true;
+                            }
+                            currentData[index].y = value.y;
+
+                            dragOriginalYs = null;
+                            dragCenter = null;
+                            dragActiveIndex = null;
+
+                            updatePointColors();
+                            updateInputText();
+                            calculateMetrics();
+                        }
+                    }
+                }
+            }
+        };
+
+        // 把自定义连线插件作为 chart 级插件挂载
+        myChart = new Chart(ctx, { ...options, plugins: [rrGuideLinePlugin] });
+        loadDataFromInput();
+    }
+
+    // --- 框选逻辑修复 ---
+
+    function handleMouseDown(e) {
+        // 检查复选框状态
+        const isSelectionMode = document.getElementById('chk-selection-mode').checked;
+        if (!isSelectionMode) return;
+
+        // 如果点击落在点上，则交给拖拽逻辑，不启动框选
+        if (myChart) {
+            const elems = myChart.getElementsAtEventForMode(e, 'nearest', { intersect: true }, true);
+            if (elems && elems.length > 0) {
+                return;
+            }
+        }
+
+        const rect = canvasWrapper.getBoundingClientRect();
+        startX = e.clientX - rect.left;
+        startY = e.clientY - rect.top;
+        isSelecting = true;
+
+        // 初始位置
+        selectionBox.style.left = startX + 'px';
+        selectionBox.style.top = startY + 'px';
+        selectionBox.style.width = '0px';
+        selectionBox.style.height = '0px';
+        selectionBox.style.display = 'block';
+    }
+
+    function handleMouseMove(e) {
+        // 只有在 flag 为 true 时才执行，这依赖于 mousedown
+        if (!isSelecting) return;
+        
+        const rect = canvasWrapper.getBoundingClientRect();
+        
+        // 计算相对于 wrapper 的鼠标位置
+        let currentX = e.clientX - rect.left;
+        let currentY = e.clientY - rect.top;
+        
+        // 允许略微出界，但要在视觉上限制一下
+        // currentX = Math.max(0, Math.min(currentX, rect.width));
+        // currentY = Math.max(0, Math.min(currentY, rect.height));
+
+        const width = currentX - startX;
+        const height = currentY - startY;
+
+        selectionBox.style.width = Math.abs(width) + 'px';
+        selectionBox.style.height = Math.abs(height) + 'px';
+        selectionBox.style.left = (width < 0 ? currentX : startX) + 'px';
+        selectionBox.style.top = (height < 0 ? currentY : startY) + 'px';
+    }
+
+    function handleMouseUp(e) {
+        if (!isSelecting) return;
+        
+        // 【关键修复3】只要鼠标松开，立刻停止框选
+        isSelecting = false;
+        selectionBox.style.display = 'none'; // 立即隐藏框
+        
+        const rect = canvasWrapper.getBoundingClientRect();
+        const endX = e.clientX - rect.left;
+        const endY = e.clientY - rect.top;
+        
+        // 如果只是轻微抖动点击，视为取消
+        if (Math.abs(endX - startX) < 5 && Math.abs(endY - startY) < 5) {
+            clearSelection();
+            return;
+        }
+        
+        // 执行选中逻辑
+        selectPointsInArea(
+            Math.min(startX, endX), Math.max(startX, endX), 
+            Math.min(startY, endY), Math.max(startY, endY)
+        );
+        
+    }
+
+    function selectPointsInArea(left, right, top, bottom) {
+        const xScale = myChart.scales.x;
+        const yScale = myChart.scales.y;
+        selectedIndices.clear(); // 每次框选重置，如果需要Shift连选可以改这里逻辑
+        
+        currentData.forEach((point, index) => {
+            const xPix = xScale.getPixelForValue(point.x);
+            const yPix = yScale.getPixelForValue(point.y);
+            
+            // 碰撞检测
+            if (xPix >= left && xPix <= right && yPix >= top && yPix <= bottom) {
+                selectedIndices.add(index);
+            }
+        });
+        updatePointColors();
+        updateInputText();
+    }
+
+    function clearSelection() {
+        selectedIndices.clear();
+        updatePointColors();
+        updateInputText();
+    }
+
+    // --- 数据逻辑 (保持不变) ---
+    function loadDataFromInput() {
+        const text = document.getElementById('rrInput').innerText.trim();
+        const lines = text.split('\n');
+        currentData = [];
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (line === '' || (i === 0 && line.includes('时间'))) continue;
+            const parts = line.split(',');
+            if (parts.length >= 2) {
+                const t = parseFloat(parts[0]);
+                const rr = parseFloat(parts[1]);
+                if (!isNaN(t) && !isNaN(rr) && rr > 0) {
+                    currentData.push({ x: t, y: rr, edited: false });
+                }
+            }
+        }
+        if (myChart) {
+            myChart.data.datasets[0].data = currentData;
+            if (currentData.length > 0) {
+                const yVals = currentData.map(d => d.y);
+                const padding = (Math.max(...yVals) - Math.min(...yVals)) * 0.1 || 50;
+                myChart.options.scales.y.min = Math.floor(Math.min(...yVals) - padding);
+                myChart.options.scales.y.max = Math.ceil(Math.max(...yVals) + padding);
+            }
+            updatePointColors();
+            calculateMetrics();
+            updateInputText();
+
+            // 先用完整数据更新一次，使 x 轴刻度初始化，然后应用缩放与平移
+            myChart.update();
+            // 重置缩放到 1:1 视图，并将视图中心重置到中间
+            xZoom = 1.0;
+            panPos = 0.5;
+            const zoomSlider = document.getElementById('zoom-slider');
+            const zoomInput = document.getElementById('zoom-input');
+            if (zoomSlider && zoomInput) {
+                zoomSlider.value = String(zoomToSlider(xZoom));
+                zoomInput.value = String(xZoom);
+            }
+            const panSlider = document.getElementById('pan-slider');
+            if (panSlider) {
+                panSlider.value = '50';
+            }
+            applyViewWindow();
+        }
+    }
+
+    function updatePointColors() {
+        if (!myChart) return;
+        const bgColors = currentData.map((p, index) => {
+            if (selectedIndices.has(index)) return COLOR_SELECTED; 
+            if (p.edited) return COLOR_EDITED;   
+            return COLOR_DEFAULT;                
+        });
+        myChart.data.datasets[0].pointBackgroundColor = bgColors;
+        myChart.data.datasets[0].pointRadius = currentData.map((p, index) => selectedIndices.has(index) ? 7 : 5);
+        myChart.update('none');
+    }
+
+    function updateInputText() {
+        const container = document.getElementById('rrInput');
+        const scrollTop = container.scrollTop;
+        let html = `<div>时间, rr_ms</div>`; 
+        currentData.forEach((p, index) => {
+            let style = "";
+            if (selectedIndices.has(index)) {
+                style = `color: ${COLOR_SELECTED}; font-weight: bold; background-color: #f0f0f0;`;
+            } else if (p.edited) {
+                style = `color: ${COLOR_EDITED}; font-weight: bold;`;
+            }
+            html += `<div style="${style}">${p.x},${p.y}</div>`;
+        });
+        container.innerHTML = html;
+        container.scrollTop = scrollTop;
+
+        updateSelectedInfo();
+    }
+
+    function calculateMetrics() {
+        const rrs = currentData.map(d => d.y);
+        const times = currentData.map(d => d.x);
+        if (rrs.length < 2) { ['val-hr','val-rmssd','val-hf'].forEach(id => document.getElementById(id).innerText = "--"); return; }
+        document.getElementById('val-hr').innerText = (60000/(rrs.reduce((a,b)=>a+b,0)/rrs.length)).toFixed(1);
+        let ss = 0; for(let i=0; i<rrs.length-1; i++) ss += Math.pow(rrs[i+1]-rrs[i], 2);
+        document.getElementById('val-rmssd').innerText = Math.sqrt(ss/(rrs.length-1)).toFixed(2);
+        try {
+            if(rrs.length<10) throw new Error();
+            const hf = calculateHFPower(times, rrs);
+            document.getElementById('val-hf').innerText = hf > 0 ? Math.log(hf).toFixed(2) : "--";
+        } catch(e){ document.getElementById('val-hf').innerText = "--"; }
+    }
+
+    function calculateHFPower(times, rrs) {
+        const fs = 4; const dur = times[times.length-1] - times[0]; const N = Math.floor(dur * fs);
+        if (N < 32) return 0;
+        const resampled = [];
+        for(let i=0; i<N; i++){
+            const t = times[0] + i/fs; let idx = 0;
+            while(idx < times.length-1 && times[idx+1] < t) idx++;
+            const t1=times[idx], t2=times[idx+1], y1=rrs[idx], y2=rrs[idx+1];
+            resampled.push(t2===t1 ? y1 : y1 + (y2-y1)*((t-t1)/(t2-t1)));
+        }
+        const mean = resampled.reduce((a,b)=>a+b,0)/N; const sig = resampled.map(v=>v-mean);
+        const spec = [];
+        for(let k=0; k<N; k++){
+            let r=0, m=0;
+            for(let n=0; n<N; n++){
+                const ang = 2*Math.PI*k*n/N; r += sig[n]*Math.cos(ang); m -= sig[n]*Math.sin(ang);
+            }
+            spec.push(r*r + m*m);
+        }
+        let sum = 0; const res = fs/N;
+        for(let i=1; i<N/2; i++){ const f = i*res; if(f>=0.15 && f<=0.4) sum += spec[i]; }
+        return sum/N;
+    }
+
+    window.onload = initChart;
+</script>
+
+</body>
+</html>
