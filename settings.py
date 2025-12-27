@@ -331,12 +331,12 @@ DATASETS = {
             # *-- 运动 acc" --*
             # enmo 表示瞬时的运动强度
             # motion_frac表示是否处于运动状态
-            # "acc_enmo_mean",
+            "acc_enmo_mean",
             # "acc_motion_frac",
             # *-- 去中心化列 --*
             # ws 表示基于基线偏移值
             # bs 表示每个被试自己的跨时点平均
-            # "acc_enmo_mean_ws",
+            "acc_enmo_mean_ws",
             # "acc_motion_frac_ws",
             # "resp_rate_bpm_ws",
             # "acc_enmo_mean_bs",

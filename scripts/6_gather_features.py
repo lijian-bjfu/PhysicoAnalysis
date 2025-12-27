@@ -120,8 +120,16 @@ def _load_segment(sid: str, sig: str, wid: int) -> Optional[pd.DataFrame]:
         if not fpath.exists():
             return None
     try:
-        df = pd.read_csv(fpath)
-        return _standardize_df(df, sig)
+        raw = pd.read_csv(fpath)
+        df = _standardize_df(raw, sig)
+        # 统一附加元数据（通用，不是 acc 特例）
+        df.attrs.update({
+            "sid": sid,
+            "sig": sig,
+            "w_id": wid,
+            "src_path": str(fpath),
+        })
+        return df
     except Exception as e:
         print(f"[WARN] 读取失败：{fpath.name} -> {e}")
         return None
@@ -252,7 +260,7 @@ def main():
     TIME_COLS = {"mean_hr_bpm","rmssd_ms","sdnn_ms"}
     FREQ_COLS = {"hf_ms2","hf_log_ms2","lf_ms2","lf_log_ms2"}
     RSA_COLS  = {"rsa_ms", "rsa_log_ms", "resp_rate_bpm", "resp_amp", "resp_log_amp"}
-    ACC_COLS  = {"acc_enmo_mean", "acc_motion_frac"}
+    ACC_COLS  = {"acc_enmo_mean"}
 
     rr_plan = []
     if set(requested_cols).intersection(TIME_COLS):
@@ -361,8 +369,7 @@ def main():
             acc_df = _load_segment(sid, 'acc', wid)
             if acc_df is None or acc_df.empty:
                 # NaN 直接占位
-                feat_parts.append(pd.DataFrame([[pd.NA, pd.NA]],
-                                            columns=["acc_enmo_mean", "acc_motion_frac"]))
+                feat_parts.append(pd.DataFrame([[pd.NA]], columns=["acc_enmo_mean"]))
                 print(f"[WARN] 缺少 acc 段：{sid}_acc_w{wid}")
                 n_missing_acc += 1 
             else:
@@ -374,8 +381,7 @@ def main():
                     print(f"[WARN] ACC 特征失败 {sid}/w{wid}: {e}")
                     n_read_errors += 1
                     # 失败也占位，避免下游列缺失
-                    feat_parts.append(pd.DataFrame([[pd.NA, pd.NA]],
-                                                columns=["acc_enmo_mean", "acc_motion_frac"]))
+                    feat_parts.append(pd.DataFrame([[pd.NA]], columns=["acc_enmo_mean"]))
 
         feat_df = pd.concat(feat_parts, axis=1) if feat_parts else pd.DataFrame()
         # per-window RR QC (minimal): rr_valid_ratio, rr_max_gap_s
@@ -409,7 +415,6 @@ def main():
     # 注意：这里的去中心化是“按受试者”进行，并不是“同一时间窗口”或“同一 timepoint”去中心化。
     targets = [c for c in [
         "acc_enmo_mean",
-        "acc_motion_frac",
         "resp_rate_bpm",
         "resp_amp",
         "resp_log_amp",

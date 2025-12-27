@@ -12,7 +12,6 @@ for _ in range(6):
         sys.path.insert(0, str(_p.parent)); break
     _p = _p.parent
 # --- end bootstrap ---
-from settings import PARAMS
 
 
 def _stdcol_acc(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
@@ -38,6 +37,49 @@ def _stdcol_acc(df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
     return acc[['t_s'] + cols].astype(float)
 
 
+# ---- Per-session baseline gravity (g0) cache ----
+# Keyed by sid (session id like P001S001T001R001). Value is g0 in the same unit as vm (mG).
+_ACC_G0_CACHE: dict[str, float] = {}
+_WARNED_MISSING_BASELINE: set[str] = set()
+
+
+def _estimate_g0_from_vm(vm: np.ndarray) -> float:
+    """Robust g0 estimation.
+
+    We estimate the gravity baseline from the lower-activity portion of vm to avoid
+    over-estimating g0 in windows with sustained motion.
+
+    Strategy:
+      - take the 20th percentile cutoff q20
+      - compute median(vm[vm <= q20])
+      - if the subset is too small, fall back to median(vm)
+    """
+    vm = vm[np.isfinite(vm)]
+    if vm.size == 0:
+        return np.nan
+    q20 = float(np.quantile(vm, 0.20))
+    base = vm[vm <= q20]
+    if base.size < max(10, int(0.05 * vm.size)):
+        base = vm
+    return float(np.median(base))
+
+
+def _is_baseline_window(src: pd.DataFrame, wid: Optional[int]) -> bool:
+    """Detect whether this window is baseline.
+
+    Primary rule: wid == 1 (your pipeline's baseline window).
+    Secondary rules: meaning/level contains 'baseline' (case-insensitive).
+    """
+    if wid == 1:
+        return True
+    for col in ("meaning", "level"):
+        if col in src.columns and len(src[col]) > 0:
+            s = str(src[col].iloc[0]).lower()
+            if "baseline" in s:
+                return True
+    return False
+
+
 def features_segment(
     rr_df: Optional[pd.DataFrame] = None,
     resp_df: Optional[pd.DataFrame] = None,
@@ -45,7 +87,7 @@ def features_segment(
     acc_df: Optional[pd.DataFrame] = None
 ) -> pd.DataFrame:
     """
-    计算单窗口加速度**两项协变量**（用于统计模型的时间变化协变量）。
+    计算单窗口加速度**一项协变量**（用于统计模型的时间变化协变量）。
     为兼容主流程保留统一接口：
       - 推荐：传 acc_df=...
       - 兼容：传 resp_df=...（旧统一接口的第二参数）或 rr_df=...
@@ -53,13 +95,13 @@ def features_segment(
     输入列（任选其一）：
       - time_s/t_s, value_x/value_y/value_z  或  t_s, ax/ay/az
 
-    输出列（仅两项）：
-      - acc_enmo_mean    : ENMO 均值，ENMO = max(||a|| - acc_g, 0)
-      - acc_motion_frac  : ENMO 超过阈值的时间占比（阈值见 PARAMS.acc_enmo_thresh）
+    输出列（仅一项）：
+      - acc_enmo_mean    : ENMO 均值，ENMO = max(||a|| - g0, 0)
 
-    仅依赖以下参数（来自 settings.PARAMS）：
-      - acc_g            : 1 g 的数值（与原始单位一致，mg 系统常设 1000.0）
-      - acc_enmo_thresh  : ENMO 阈值（mg），用于计算占比
+    g0 估计：
+      - g0 为重力基线，单位与数据一致。
+      - 从同一会话的基线窗口（wid==1）中估计并缓存。
+      - 若基线窗口缺失，则回退到当前窗口内的稳健估计。
     """
     # 解析数据来源：优先 acc_df，其次 resp_df，最后 rr_df（为兼容旧调用）
     src = acc_df if acc_df is not None else (resp_df if resp_df is not None else rr_df)
@@ -67,28 +109,44 @@ def features_segment(
 
     if acc is None or acc.empty:
         return pd.DataFrame([{
-            # 以下两个值与 settings signal_features 的值一致
-            # 去掉重力后的整体动作强度。静止时接近 0；随动作幅度增大而升高
             'acc_enmo_mean': np.nan,
-            # 这一窗里，有多少比例的时间处在“明显在动”的状态。0 表示几乎全程静止；1 表示几乎全程超过阈值地在动
-            'acc_motion_frac': np.nan
         }])
 
-    # 参数（单位以你的数据为准；默认 mg 系统，1g≈1000）
-    g_val = float(PARAMS.get('acc_g', 1000.0))
-    enmo_thr = float(PARAMS.get('acc_enmo_thresh', 30.0))
+    sid = None
+    wid = None
+    if src is not None:
+        sid = src.attrs.get("sid") if hasattr(src, "attrs") else None
+        wid = src.attrs.get("w_id") if hasattr(src, "attrs") else None
+        try:
+            wid = int(wid) if wid is not None else None
+        except Exception:
+            wid = None
 
     ax = acc['ax'].to_numpy()
     ay = acc['ay'].to_numpy()
     az = acc['az'].to_numpy()
 
-    # 向量模与 ENMO
+    # 向量模
     vm = np.sqrt(ax*ax + ay*ay + az*az)
-    enmo = np.maximum(vm - g_val, 0.0)
+
+    # ---- g0 estimation (session baseline cached) ----
+    if sid is not None and _is_baseline_window(src, wid):
+        _ACC_G0_CACHE[sid] = _estimate_g0_from_vm(vm)
+
+    if sid is not None and sid in _ACC_G0_CACHE and np.isfinite(_ACC_G0_CACHE[sid]):
+        g0 = _ACC_G0_CACHE[sid]
+    else:
+        # Fallback: robust within-window estimation
+        g0 = _estimate_g0_from_vm(vm)
+        if sid is not None and sid not in _WARNED_MISSING_BASELINE:
+            print(f"[WARN] ACC baseline g0 missing for sid={sid}; falling back to within-window g0.")
+            _WARNED_MISSING_BASELINE.add(sid)
+
+    # Vector magnitude and ENMO
+    enmo = np.maximum(vm - g0, 0.0)
 
     out = {
         'acc_enmo_mean': float(np.nanmean(enmo)) if enmo.size else np.nan,
-        'acc_motion_frac': float(np.mean(enmo > enmo_thr)) if enmo.size else np.nan,
     }
     return pd.DataFrame([out])
 
@@ -99,4 +157,4 @@ def features_segment_acc(acc_df: pd.DataFrame) -> pd.DataFrame:
 
 
 if __name__ == '__main__':
-    print('features_segment(acc_df=...) -> DataFrame[1x2] (acc_enmo_mean, acc_motion_frac)')
+    print('features_segment(acc_df=...) -> DataFrame[1x1] (acc_enmo_mean)')
