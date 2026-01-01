@@ -19,6 +19,8 @@ DS = DATASETS[ACTIVE_DATA]
 paths = DS["paths"]
 SRC_ROOT      = (DATA_DIR / paths["windowing"]).resolve()
 SRC_DIR_RR       = (SRC_ROOT / "collected"/ "rr").resolve()
+SRC_DIR_HR       = (SRC_ROOT / "collected"/ "hr").resolve()
+# HR window files are optional. If present, we prefer them over deriving HR from RR.
 SRC_DIR_ECG       = (SRC_ROOT / "collected"/ "ecg").resolve()
 SRC_DIR_RESP       = (SRC_ROOT / "collected"/ "resp").resolve()
 OUT_ROOT      = (DATA_DIR / paths["preview"]).resolve()
@@ -33,49 +35,78 @@ OUT_DIR       = (OUT_ROOT / 'window_plots').resolve()
 
 # 要绘制的被试ID列表与窗口ID列表，按照这个列表生成预览图
 SID = [
-    # "P001S001T001R001",
-    # "P002S001T002R001",
-    # "P003S001T001R001",
-    # "P004S001T002R001",
-    # "P006S001T002R001",
-    # "P007S001T001R001",
-    # "P008S001T002R001",
-    # "P009S001T001R001",
-    # "P010S001T002R001",
-    # "P011S001T001R001",
-    # "P012S001T001R001",
-    # "P013S001T002R001",
-    # "P014S001T001R001",
-    # "P015S001T002R001",
-    # "P016S001T001R001",
-    # "P017S001T001R001",
-    # "P018S001T001R001",
-    # "P019S001T001R001",
-    # "P020S001T001R001",
-    # "P021S001T001R001",
-    # "P022S001T001R001",
-    # "P023S001T001R001",
-    # "P024S001T002R001",
-    # "P025S001T002R001",
-    # "P026S001T002R001",
-    # "P027S001T002R001",
-    # "P028S001T002R001",
-    # "P029S001T002R001",
-    # "P030S001T002R001",
-    # "P031S001T002R001",
-    # "P032S001T001R001",
-    # "P033S001T001R001",
-    # "P034S001T001R001",
-    # "P035S001T002R001",
+    "P001S001T001R001",
+    "P002S001T002R001",
+    "P003S001T001R001",
+    "P004S001T002R001",
+    "P006S001T002R001",
+    "P007S001T001R001",
+    "P008S001T002R001",
+    "P009S001T001R001",
+    "P010S001T002R001",
+    "P011S001T001R001",
+    "P012S001T001R001",
+    "P013S001T002R001",
+    "P014S001T001R001",
+    "P015S001T002R001",
+    "P016S001T001R001",
+    "P017S001T001R001",
+    "P018S001T001R001",
+    "P019S001T001R001",
+    "P020S001T001R001",
+    "P021S001T001R001",
+    "P022S001T001R001",
+    "P023S001T001R001",
+    "P024S001T002R001",
+    "P025S001T002R001",
+    "P026S001T002R001",
+    "P027S001T002R001",
+    "P028S001T002R001",
+    "P029S001T002R001",
+    "P030S001T002R001",
+    "P031S001T002R001",
+    "P032S001T001R001",
+    "P033S001T001R001",
+    "P034S001T001R001",
+    "P035S001T002R001",
     "P036S001T002R001",
-    # "P037S001T002R001",
-    # "P038S001T001R001",
+    "P037S001T002R001",
+    "P038S001T001R001",
+    "P039S001T001R001",
+    "P040S001T001R001",
+    "P041S001T001R001",
+    "P042S001T001R001",
+    "P043S001T001R001",
+    "P044S001T001R001",
+    "P045S001T001R001",
+    "P046S001T001R001",
+    "P047S001T001R001",
+    "P048S001T001R001",
+    "P049S001T002R001",
+    "P050S001T002R001",
+    "P051S001T002R001",
+    "P052S001T002R001",
+    "P053S001T002R001",
+    "P054S001T002R001",
+    "P055S001T002R001",
+    "P056S001T002R001",
+    "P057S001T002R001",
+    "P058S001T002R001",
+    "P059S001T002R001",
+    "P060S001T002R001",
+    "P061S001T002R001",
+    "P062S001T002R001",
+    "P063S001T001R001",
+    "P064S001T001R001",
+    "P065S001T001R001",
+    "P066S001T001R001",
     ]
-WIN = ['w01','w02','w03','w04','w05','w06']
-WIN = ['w05']
-SIG = ["rr"]          # 只画呼吸相关（跨窗 RESP 概图）
+WIN = ['w01','w02','w03','w04','w05','w06'] # 展示哪些窗口
+# WIN = ['w05'] # 注意，如果只有一个窗口不会有跨窗口图
+SIG = ["rr","ecg","resp"]          
 # SIG = ["rr"]          # 只画 RR/HR 相关
 # SIG = ["ecg"]         # 只画 ECG zoom
+# SIG = ["resp"]        # 只画呼吸相关（跨窗 RESP 概图）
 # SIG = ["rr","resp"]   # 两类都画
 # SIG = []              # 空 = 默认全画
 import matplotlib.pyplot as plt
@@ -206,6 +237,73 @@ def _rr_path_for(sid: str, win_id: str) -> Path:
     fname = f"{sid}_rr_{win_id}.csv"
     return (SRC_DIR_RR / fname).resolve()
 
+
+# --- HR window helpers ---
+def _hr_path_for(sid: str, win_id: str) -> Path:
+    """Build path to HR file for a given subject and window.
+    Expected pattern: {sid}_hr_{win_id}.(csv|parquet|pq)
+    """
+    cand = [
+        (SRC_DIR_HR / f"{sid}_hr_{win_id}.csv").resolve(),
+        (SRC_DIR_HR / f"{sid}_hr_{win_id}.parquet").resolve(),
+        (SRC_DIR_HR / f"{sid}_hr_{win_id}.pq").resolve(),
+    ]
+    for p in cand:
+        if p.exists():
+            return p
+    hits = sorted(SRC_DIR_HR.glob(f"{sid}_hr_{win_id}.*"))
+    return hits[0].resolve() if hits else cand[0]
+
+
+def _load_hr_df(path: Path) -> pd.DataFrame | None:
+    """Load HR window file and normalize to columns: t_s, bpm.
+
+    Returns a DataFrame with added columns:
+      - 't_s_relative' : t_s zeroed to its own minimum
+      - 'hr_bpm'       : bpm (numeric)
+
+    If the file is missing or invalid, returns None.
+    """
+    if not path.exists():
+        return None
+
+    try:
+        if path.suffix.lower() in (".parquet", ".pq"):
+            df_raw = pd.read_parquet(path)
+        else:
+            df_raw = pd.read_csv(path)
+    except Exception as e:
+        print(f"[warn] failed to read HR {path}: {e}")
+        return None
+
+    if df_raw is None or df_raw.empty:
+        return None
+
+    cols = list(df_raw.columns)
+    # canonical names
+    time_cols = ["t_s", "time_s", "timestamp_s", "time"]
+    bpm_cols = ["bpm", "hr_bpm", "hr", "heart_rate", "value"]
+
+    col_time = next((c for c in time_cols if c in cols), None)
+    col_bpm = next((c for c in bpm_cols if c in cols), None)
+
+    # fallback: first two columns
+    if col_time is None:
+        col_time = cols[0]
+    if col_bpm is None:
+        col_bpm = cols[1] if len(cols) >= 2 else cols[0]
+
+    df = df_raw[[col_time, col_bpm]].rename(columns={col_time: "t_s", col_bpm: "bpm"}).copy()
+    df["t_s"] = pd.to_numeric(df["t_s"], errors="coerce")
+    df["bpm"] = pd.to_numeric(df["bpm"], errors="coerce")
+    df = df.dropna(subset=["t_s", "bpm"]).sort_values("t_s")
+    if df.empty:
+        return None
+
+    df["t_s_relative"] = df["t_s"] - float(df["t_s"].min())
+    df["hr_bpm"] = df["bpm"].astype(float)
+    return df
+
 def _load_rr_df(path: Path) -> pd.DataFrame | None:
     """
     Load RR csv with at least two columns: 't_s' and 'rr_ms'.
@@ -250,11 +348,20 @@ def plot_hr_comparison_for_window(win_id: str, sids: list[str]) -> None:
     """
     series = []
     for sid in sids:
-        path = _rr_path_for(sid, win_id)
-        df = _load_rr_df(path)
-        if df is None or df.empty:
+        # Prefer HR window files if present; otherwise derive HR from RR.
+        hr_path = _hr_path_for(sid, win_id)
+        df_hr = _load_hr_df(hr_path)
+        if df_hr is not None and (not df_hr.empty):
+            series.append((sid, df_hr))
+            print(f"[info] {sid} {win_id}: HR source=hr_file ({hr_path.name})")
             continue
-        series.append((sid, df))
+
+        rr_path = _rr_path_for(sid, win_id)
+        df_rr = _load_rr_df(rr_path)
+        if df_rr is None or df_rr.empty:
+            continue
+        series.append((sid, df_rr))
+        print(f"[info] {sid} {win_id}: HR source=rr_derived")
     if not series:
         print(f"[info] no data to plot HR comparison for window {win_id}")
         return
@@ -385,7 +492,6 @@ def plot_rr_all_windows_for_subject(sid: str, win_ids: list[str]) -> None:
 
 
 # --------- overview resp plot across all windows for a subject ---------
-
 def _resp_path_for(sid: str, win_id: str) -> Path:
     """Build path to RESP file for a given subject and window.
     Expected pattern: {sid}_resp_{win_id}.(csv|parquet|pq)
@@ -534,8 +640,6 @@ def _find_peaks_robust(y: np.ndarray, distance: int, prominence: float, width: i
                 kept.append(int(i))
         kept.sort()
         return np.asarray(kept, dtype=int)
-
-
 
 
 def _contiguous_true_spans(mask: np.ndarray, min_len: int = 1) -> list[tuple[int, int]]:

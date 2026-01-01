@@ -46,9 +46,9 @@ BR_FORCE_YLIM = (6, 30)
 RESP_MAX_BPM = 30
 # ecg 放大图的起点（make_windowing_ecg_plot），事件名或具体时间点选其一
 ECG_PlOT_START_EVENT = None
-ECG_PLOT_START = 100050
+ECG_PLOT_START = 88070
 # ecg 放大图时窗口的大小，
-ECG_PLOT_SPAN = 130.0
+ECG_PLOT_SPAN = 50
 
 # 不按照系统设定，临时检查文件
 # SRC_DIR = (DATA_DIR / paths["confirmed"])
@@ -90,16 +90,46 @@ PRE_SID = [
     "P036S001T002R001",
     "P037S001T002R001",
     "P038S001T001R001",
+    "P039S001T001R001",
+    "P040S001T001R001",
+    "P041S001T001R001",
+    "P042S001T001R001",
+    "P043S001T001R001",
+    "P044S001T001R001",
+    "P045S001T001R001",
+    "P046S001T001R001",
+    "P047S001T001R001",
+    "P048S001T001R001",
+    "P049S001T002R001",
+    "P050S001T002R001",
+    "P051S001T002R001",
+    "P052S001T002R001",
+    "P053S001T002R001",
+    "P054S001T002R001",
+    "P055S001T002R001",
+    "P056S001T002R001",
+    "P057S001T002R001",
+    "P058S001T002R001",
+    "P059S001T002R001",
+    "P060S001T002R001",
+    "P061S001T002R001",
+    "P062S001T002R001",
+    "P063S001T001R001",
+    "P064S001T001R001",
+    "P065S001T001R001",
+    "P066S001T001R001",
     ]
-PRE_SIG = ["resp"]
+PRE_SIG = ["rr"] # "rr", "ecg", "resp"
 
 PRE_SID = [
-    "P004S001T002R001",
-    # "P002S001T002R001",
-    # "P003S001T001R001",
-    # "P004S001T002R001",
+    # "P060S001T002R001",
+    # "P061S001T002R001",
+    "P012S001T001R001",
+    # "P064S001T001R001",
+    # "P065S001T001R001",
+    # "P066S001T001R001",
     ]
-# PRE_SIG = ["rr","ecg"]
+PRE_SIG = ["rr"]
 
 # Use SCHEMA-defined canonical column names first, then fallback heuristics
 def _get_time_col(df: pd.DataFrame, signal: str) -> Optional[str]:
@@ -375,6 +405,19 @@ def _overlay_events_on_axes(ax, sid: str):
     else:
         print(f"[info] {sid}: no events to annotate under norm")
 
+
+# --- Helper: overlay events as lines only (no labels, for stacked plots) ---
+def _overlay_events_lines(ax, sid: str):
+    """Overlay events as vertical red dashed lines WITHOUT labels (to reduce clutter on stacked plots)."""
+    ev = load_events(SRC_NORM_DIR, sid)
+    if ev is None or ev.empty:
+        return
+    for _, row in ev.iterrows():
+        x = float(row["time_s"]) if pd.notna(row["time_s"]) else None
+        if x is None:
+            continue
+        ax.axvline(x=x, color="red", linestyle="--", linewidth=0.8, alpha=0.55, zorder=2)
+
 def load_signal_raw(src_dir: Path, sid: str, signal: str) -> Optional[tuple[pd.DataFrame, str]]:
     """Load a signal in ORIGINAL scale (no normalization, no RR→HR conversion).
     Returns (df, value_name) where df has columns: time_s, value.
@@ -491,12 +534,17 @@ def _plot_ecg_signal(sid: str, sig: str):
 
 def _plot_ecg_zoom_with_peaks_range(sid: str, t_start: float, span_s: float = 10.0):
     """
-    诊断用：在 [t_start, t_start+span_s] 窗口内绘制 ECG，并自动标注 R 峰与 RR。
+    诊断用：在 [t_start, t_start+span_s] 窗口内绘制 ECG，并自动标注 R 峰，并输出三行图：
+    - 上：ECG（raw + 5–20Hz）+ R 峰
+    - 中：基于 ECG 峰得到的 RR(ms)（含 QC 标注）
+    - 下：device RR（H10 原生 RR）在同一时段的 RR(ms)
     - 自动估计采样率 fs
     - 轻带通滤波（5–20 Hz，突出 QRS；若 SciPy 不可用则跳过滤波）
     - 峰间最小距离由 200 bpm 推得（>= 0.3 s）
     - 峰的 prominence 由 1–99% 幅度自适应设定
-    输出两行图：上=ECG+R峰；下=RR(毫秒)
+    rr 图除了现有折线，还标注RR点。
+    ecg-rr 图中 rr点为蓝色，连线为淡绿色，QC点标注红色
+    device-rr图中，rr点为橙黄色，连线为淡粉色，无QC标注。
     """
     loaded = load_signal_raw(SRC_NORM_DIR, sid, "ecg")
     if not loaded:
@@ -612,42 +660,95 @@ def _plot_ecg_zoom_with_peaks_range(sid: str, t_start: float, span_s: float = 10
         )
 
     # 画图
-    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(14, 6), sharex=True,
-                                   gridspec_kw={"height_ratios": [2, 1]})
+    fig, (ax0, ax1, ax2) = plt.subplots(3, 1, figsize=(14, 8), sharex=True,
+                                       gridspec_kw={"height_ratios": [2, 1, 1]})
 
     ax0.plot(t, x, color="#a6bddb", linewidth=0.6, alpha=0.8, label="ECG raw")
     ax0.plot(t, xf, color="#225ea8", linewidth=0.8, alpha=0.9, label="ECG (5–20 Hz)")
     if pk.size:
         ax0.scatter(t[pk], xf[pk], color="crimson", s=18, zorder=5, label="R peaks")
     _overlay_events_on_axes(ax0, sid)
+
+    # for lower panels: only draw event lines (no labels)
+    _overlay_events_lines(ax1, sid)
+    _overlay_events_lines(ax2, sid)
+
     # Fix x-limits to the selected window
     ax0.set_xlim(t0, t1)
     ax0.set_ylabel(ylabel)
     ax0.legend(loc="upper right", frameon=True)
     ax0.set_title(f"{sid} ECG zoom {t0:.1f}–{t1:.1f}s  |  fs≈{fs:.1f} Hz, peaks={pk.size}")
 
-    if rr_ms is not None:
-        # use tm computed above
-        ax1.plot(tm, rr_ms, color="#31a354", linewidth=1.2, label="RR")
-        # overlay QC-flagged points
+    if rr_ms is not None and tm is not None:
+        rr_ms_arr = np.asarray(rr_ms, dtype=float)
+
+        # --- Middle panel: ECG-derived RR ---
+        # line: light green, points: blue
+        ax1.plot(tm, rr_ms_arr, color="#b2df8a", linewidth=1.2, alpha=0.9, label="ECG→RR (line)")
+        ax1.scatter(tm, rr_ms_arr, s=14, color="#1f78b4", alpha=0.9, zorder=4, label="ECG→RR (points)")
+
+        # QC points (red x)
         if qc_flags is not None and np.any(qc_flags):
-            ax1.scatter(tm[qc_flags], np.asarray(rr_ms)[qc_flags], marker='x', s=28,
-                        linewidths=0.9, color='crimson', alpha=0.9, label='QC flagged')
-        # robust y-limits
-        q1, q99 = np.nanpercentile(rr_ms, [5, 95])
-        span = max(1, q99 - q1)
-        ax1.set_ylim(q1 - 0.2*span, q99 + 0.2*span)
-        ax1.set_ylabel("RR (ms)")
+            ax1.scatter(tm[qc_flags], rr_ms_arr[qc_flags], marker='x', s=36,
+                        linewidths=1.0, color='crimson', alpha=0.95, zorder=5, label='QC flagged')
+
+        # robust y-limits for ECG-derived RR
+        q1, q99 = np.nanpercentile(rr_ms_arr, [5, 95])
+        span = max(1.0, float(q99 - q1))
+        ax1.set_ylim(q1 - 0.2 * span, q99 + 0.2 * span)
+        ax1.set_ylabel("RR (ms) — ECG")
         ax1.legend(loc="upper right", frameon=True)
+
+        # --- Bottom panel: device RR (H10 native RR) in the same window ---
+        dev_loaded = load_signal_raw(SRC_DIR, sid, "rr")
+        if not dev_loaded:
+            ax2.text(0.5, 0.5, "no device RR", transform=ax2.transAxes,
+                     ha="center", va="center", color="gray")
+            ax2.set_ylim(0, 1)
+            ax2.set_yticks([])
+        else:
+            df_dev_rr, _ = dev_loaded
+            df_dev_rr = df_dev_rr[(df_dev_rr["time_s"] >= t0) & (df_dev_rr["time_s"] <= t1)].copy()
+            df_dev_rr = df_dev_rr.dropna(subset=["time_s", "value"])
+            if df_dev_rr.empty:
+                ax2.text(0.5, 0.5, "no device RR in window", transform=ax2.transAxes,
+                         ha="center", va="center", color="gray")
+                ax2.set_ylim(0, 1)
+                ax2.set_yticks([])
+            else:
+                tt = df_dev_rr["time_s"].to_numpy(dtype=float)
+                vv = df_dev_rr["value"].to_numpy(dtype=float)
+                o = np.argsort(tt)
+                tt, vv = tt[o], vv[o]
+
+                # line: pale pink, points: orange-yellow
+                ax2.plot(tt, vv, color="#f7b6d2", linewidth=1.1, alpha=0.85, label="device RR (line)")
+                ax2.scatter(tt, vv, s=14, color="#f28e2b", alpha=0.9, zorder=4, label="device RR (points)")
+
+                # robust y-limits for device RR
+                q1d, q99d = np.nanpercentile(vv, [5, 95])
+                spand = max(1.0, float(q99d - q1d))
+                ax2.set_ylim(q1d - 0.2 * spand, q99d + 0.2 * spand)
+                ax2.set_ylabel("RR (ms) — device")
+                ax2.legend(loc="upper right", frameon=True)
+
     else:
         ax1.text(0.5, 0.5, "too few peaks", transform=ax1.transAxes,
                  ha="center", va="center", color="gray")
         ax1.set_ylim(0, 1)
         ax1.set_yticks([])
+
+        ax2.text(0.5, 0.5, "device RR not available", transform=ax2.transAxes,
+                 ha="center", va="center", color="gray")
+        ax2.set_ylim(0, 1)
+        ax2.set_yticks([])
+
     # Fix x-limits to the selected window
     ax1.set_xlim(t0, t1)
-    ax1.set_xlabel("time (s)")
+    ax2.set_xlim(t0, t1)
+    ax2.set_xlabel("time (s)")
     ax1.grid(True, alpha=0.2)
+    ax2.grid(True, alpha=0.2)
 
     out = (OUT_ROOT / f"{sid}_ecg_zoom.png").resolve()
     plt.tight_layout()

@@ -74,6 +74,9 @@ def main() -> None:
         emit_fields = list(group_map.keys())
 
     value_map = groups_cfg.get("value", {})
+    # 是否将分组编码做 zero-based 处理（例如 1/2 -> 0/1），便于后续回归/交互项建模
+    # 可在 settings.py 的 groups 区块中配置：zero_base: true/false
+    zero_base = bool(groups_cfg.get("zero_base", True))
 
     # 打印配置摘要
     print("[INFO] 组解析配置：mode=slices (按位置切片)")
@@ -86,6 +89,7 @@ def main() -> None:
             start, end = spec.get("start"), spec.get("end")
         print(f"  - {k}: start={start}, end={end}")
     print(f"[INFO] 最终输出的组列: {emit_fields}")
+    print(f"[INFO] zero_base 编码: {zero_base} (若为 True，将把数值型分组码整体减 1)")
 
     # 扫描被试
     print(f"[INFO] 输入目录: {SRC_DIR}")
@@ -127,6 +131,24 @@ def main() -> None:
     # 重排列顺序，不插入 group_id 列
     cols = ["subject_id"] + emit_fields
     df = df[cols]
+
+    # 将分组编码从 1-based 转为 0-based（例如 1/2 -> 0/1）。
+    # 规则：仅对“可完全转为数值”的列生效，且该列非缺失最小值为 1 时才整体减 1，避免重复减法。
+    if zero_base and not df.empty:
+        for field in emit_fields:
+            try:
+                ser_num = pd.to_numeric(df[field], errors="raise")
+            except Exception:
+                continue  # 非数值列（例如字符串标签），不处理
+            # 仅当该列最小非缺失值为 1 时才转换为 0-based
+            minv = ser_num.dropna().min() if ser_num.notna().any() else None
+            if minv == 1:
+                ser_num = ser_num - 1
+                # 若全为整数（或整数型浮点），写回 int，便于后续统计软件识别
+                if (ser_num.dropna() % 1 == 0).all():
+                    df[field] = ser_num.astype("Int64")
+                else:
+                    df[field] = ser_num
 
     # 统计分组数量，按每个字段统计
     for field in emit_fields:

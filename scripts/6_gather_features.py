@@ -25,7 +25,7 @@ OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 # Signals and feature plan
 APPLY_TO: List[str] = DS.get("windowing", {}).get("apply_to", ["rr"])  # e.g., ["rr", "resp"]
-SIGNAL_FEATURES = DS.get("signal_features", [])    # e.g., ["mean_hr_bpm","hf_ms2","rsa_ms"]
+SIGNAL_FEATURES = DS.get("signal_features", [])    # e.g., ["hr_bpm","hf_ms2","rsa_ms"]
 
 # Feature modules (aliases to avoid name collision)
 try:
@@ -256,8 +256,9 @@ def main():
         requested_cols = SIGNAL_FEATURES
     else:
         requested_cols = []
+    NEED_HR = "hr_bpm" in set(requested_cols)
 
-    TIME_COLS = {"mean_hr_bpm","rmssd_ms","sdnn_ms"}
+    TIME_COLS = {"hr_bpm","rmssd_ms","sdnn_ms"}
     FREQ_COLS = {"hf_ms2","hf_log_ms2","lf_ms2","lf_log_ms2"}
     RSA_COLS  = {"rsa_ms", "rsa_log_ms", "resp_rate_bpm", "resp_amp", "resp_log_amp"}
     ACC_COLS  = {"acc_enmo_mean"}
@@ -306,6 +307,9 @@ def main():
     n_read_errors = 0
     n_skipped_no_index = 0
     n_acc = 0
+    n_hr_file_used = 0
+    n_hr_fallback_rr = 0
+    n_hr_file_missing_or_empty = 0
 
     for sid, wid in tqdm(combos, desc="Computing features", unit="win"):
         rr_df = _load_segment(sid, "rr", wid)
@@ -313,6 +317,14 @@ def main():
             print(f"[WARN] 缺少 RR 段：{sid}_rr_w{wid}")
             n_missing_rr += 1
             continue
+
+        # Optional: prefer explicit HR window data for hr_bpm if available.
+        hr_df = None
+        if NEED_HR:
+            hr_df = _load_segment(sid, "hr", wid)
+            if hr_df is None or hr_df.empty:
+                hr_df = None
+                n_hr_file_missing_or_empty += 1
 
         resp_df = _load_segment(sid, "resp", wid)
         if resp_df is None or resp_df.empty:
@@ -338,6 +350,22 @@ def main():
         if "time" in rr_plan:
             try:
                 time_data = f_time.features_segment(rr_df)
+
+                # Prefer HR window file for hr_bpm when present; otherwise keep RR-derived hr_bpm.
+                if NEED_HR and hr_df is not None and (not hr_df.empty) and ("hr_bpm" in time_data.columns):
+                    try:
+                        bpm = pd.to_numeric(hr_df.get("bpm"), errors="coerce")
+                        bpm = bpm.dropna()
+                        if len(bpm) > 0:
+                            time_data.loc[0, "hr_bpm"] = float(bpm.mean())
+                            n_hr_file_used += 1
+                        else:
+                            n_hr_fallback_rr += 1
+                    except Exception:
+                        n_hr_fallback_rr += 1
+                elif NEED_HR and ("hr_bpm" in time_data.columns):
+                    n_hr_fallback_rr += 1
+
                 feat_parts.append(time_data)
                 n_time += 1
                 # print(f'[FEATURES] time: {time_data.columns}')
@@ -435,6 +463,8 @@ def main():
     print(f"  缺少 RR 窗口数: {n_missing_rr}")
     print(f"  无切窗索引信息跳过数: {n_skipped_no_index}")
     print(f"  时域特征成功数: {n_time}")
+    if NEED_HR:
+        print(f"  hr_bpm 来源: hr_file_used={n_hr_file_used}, rr_derived_fallback={n_hr_fallback_rr}, hr_file_missing_or_empty={n_hr_file_missing_or_empty}")
     print(f"  频域特征成功数: {n_freq}")
     if "rsa" in rr_plan:
         print(f"  RSA 字段写入窗口数: {n_rsa}  (其中无呼吸段占位: {n_rsa_skipped_no_resp})")

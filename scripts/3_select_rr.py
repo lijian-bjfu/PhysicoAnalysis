@@ -28,6 +28,12 @@ SID = DATASETS[ACTIVE_DATA]["preview_sids"]
 PLOT_RANGE_MODE = 'auto'
 ECG_RR_V = 'v2' # v1 v2 两种算法
 
+# —— 放大绘图窗口（用于快速检查局部区间）——
+# 当 PLOT_START 与 PLOT_SPAN 均不为 None 时：强制使用 [PLOT_START, PLOT_START+PLOT_SPAN] 作为 x 轴范围。
+# 当任意一个为 None 时：使用默认策略（由 PLOT_RANGE_MODE 决定：events/hr/auto）。
+PLOT_START = 348950  # 例如 537160 / None
+PLOT_SPAN  = None  # 例如 20（秒）/ None
+
 DEC_SUGG = PREVIEW_DIR / "decision_suggested.csv"
 DEC_FILE = PREVIEW_DIR / "decision.csv"
 
@@ -40,39 +46,67 @@ SID = [
     "P002S001T002R001",
     "P003S001T001R001",
     "P004S001T002R001",
-    # "P006S001T002R001",
-    # "P007S001T001R001",
-    # "P008S001T002R001",
-    # "P009S001T001R001",
-    # "P010S001T002R001",
-    # "P011S001T001R001",
-    # "P012S001T001R001",
-    # "P013S001T002R001",
-    # "P014S001T001R001",
-    # "P015S001T002R001",
-    # "P016S001T001R001",
-    # "P017S001T001R001",
-    # "P018S001T001R001",
-    # "P019S001T001R001",
-    # "P020S001T001R001",
-    # "P021S001T001R001",
-    # "P022S001T001R001",
-    # "P023S001T001R001",
-    # "P024S001T002R001",
-    # "P025S001T002R001",
-    # "P026S001T002R001",
-    # "P027S001T002R001",
-    # "P028S001T002R001",
-    # "P029S001T002R001",
-    # "P030S001T002R001",
-    # "P031S001T002R001",
-    # "P032S001T001R001",
-    # "P033S001T001R001",
-    # "P034S001T001R001",
-    # "P035S001T002R001",
-    # "P036S001T002R001",
-    # "P037S001T002R001",
-    # "P038S001T001R001",
+    "P006S001T002R001",
+    "P007S001T001R001",
+    "P008S001T002R001",
+    "P009S001T001R001",
+    "P010S001T002R001",
+    "P011S001T001R001",
+    "P012S001T001R001",
+    "P013S001T002R001",
+    "P014S001T001R001",
+    "P015S001T002R001",
+    "P016S001T001R001",
+    "P017S001T001R001",
+    "P018S001T001R001",
+    "P019S001T001R001",
+    "P020S001T001R001",
+    "P021S001T001R001",
+    "P022S001T001R001",
+    "P023S001T001R001",
+    "P024S001T002R001",
+    "P025S001T002R001",
+    "P026S001T002R001",
+    "P027S001T002R001",
+    "P028S001T002R001",
+    "P029S001T002R001",
+    "P030S001T002R001",
+    "P031S001T002R001",
+    "P032S001T001R001",
+    "P033S001T001R001",
+    "P034S001T001R001",
+    "P035S001T002R001",
+    "P036S001T002R001",
+    "P037S001T002R001",
+    "P038S001T001R001",
+    "P039S001T001R001",
+    "P040S001T001R001",
+    "P041S001T001R001",
+    "P042S001T001R001",
+    "P043S001T001R001",
+    "P044S001T001R001",
+    "P045S001T001R001",
+    "P046S001T001R001",
+    "P047S001T001R001",
+    "P048S001T001R001",
+    "P049S001T002R001",
+    "P050S001T002R001",
+    "P051S001T002R001",
+    "P052S001T002R001",
+    "P053S001T002R001",
+    "P054S001T002R001",
+    "P055S001T002R001",
+    "P056S001T002R001",
+    "P057S001T002R001",
+    "P058S001T002R001",
+    "P059S001T002R001",
+    "P060S001T002R001",
+    "P061S001T002R001",
+    "P062S001T002R001",
+    "P063S001T001R001",
+    "P064S001T001R001",
+    "P065S001T001R001",
+    "P066S001T001R001",
     ]
 
 # —— comb_rr 默认阈值（可按需调）——
@@ -489,6 +523,26 @@ def _determine_plot_range(sid: str, bins):
         xmax += pad
     return xmin, xmax
 
+# 新增：带放大窗口的横轴范围确定
+def _determine_plot_range_with_zoom(sid: str, bins):
+    """决定绘图横轴范围：若启用放大窗口则优先使用放大窗口，否则走默认策略。"""
+    # 1) 放大窗口优先
+    if PLOT_START is not None and PLOT_SPAN is not None:
+        try:
+            x0 = float(PLOT_START)
+            span = float(PLOT_SPAN)
+            if np.isfinite(x0) and np.isfinite(span) and span > 0:
+                xmin, xmax = x0, x0 + span
+                # 给一点边距，避免贴边的标签遮挡
+                pad = max(0.2, 0.01 * (xmax - xmin))
+                return xmin - pad, xmax + pad
+        except Exception:
+            # 任意异常都回退到默认策略
+            pass
+
+    # 2) 默认策略（events/hr/auto）
+    return _determine_plot_range(sid, bins)
+
 # 在已有 HR 图上叠加 events（红色竖线）与 ACC 活动（灰色点线，右轴 0–1）
 # bins_range: (xmin,xmax) 用于限制可视范围，可传 None
 def _overlay_events_and_acc(ax, sid: str, bins_range=None):
@@ -561,8 +615,8 @@ def _plot_preview_single_rr(sid: str, rr: pd.DataFrame, label: str = "HR from EC
     # ax.legend()
     ax.grid(True, alpha=.3)
 
-    # 选择横轴范围（events 优先或 HR，取决于策略）
-    xmin, xmax = _determine_plot_range(sid, bins)
+    # 选择横轴范围（events 优先或 HR，取决于策略；支持放大窗口）
+    xmin, xmax = _determine_plot_range_with_zoom(sid, bins)
     if xmin is not None and xmax is not None:
         ax.set_xlim(xmin, xmax)
         rng = (xmin, xmax)
@@ -743,15 +797,13 @@ def main():
             if rr_dev is not None: ax.plot(bins, hr_dev, label="HR from device RR")
             if rr_ecg is not None: ax.plot(bins, hr_ecg, label="HR from ECG→RR", linestyle="--")
             tit = f"{sid}  MAE={mae:.2f}  bias={bias:+.2f} bpm"
-            # ax.set_title(tit); ax.set_xlabel("time (s)"); ax.set_ylabel("bpm"); ax.legend(); ax.grid(True, alpha=.3)
-            # fig.tight_layout(); fig.savefig(PREVIEW_DIR / f"preview_{sid}.png", dpi=130); plt.close(fig)
             ax.set_title(tit)
             ax.set_xlabel("time (s)")
             ax.set_ylabel("bpm")
             ax.legend()
             ax.grid(True, alpha=.3)
             # 选择横轴范围并叠加 events/acc
-            xmin, xmax = _determine_plot_range(sid, bins)
+            xmin, xmax = _determine_plot_range_with_zoom(sid, bins)
             if xmin is not None and xmax is not None:
                 ax.set_xlim(xmin, xmax)
                 rng = (xmin, xmax)

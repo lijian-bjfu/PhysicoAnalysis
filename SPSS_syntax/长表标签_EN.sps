@@ -16,7 +16,7 @@ VARIABLE LABELS
   resp_log_amp     'Respiration Amplitude (Log)'
   resp_rate_bpm    'Respiration Rate (BPM)'
   resp_rate_bpm_ws 'Respiration Rate (Within-Subj)'
-  mean_hr_bpm      'Mean Heart Rate (BPM)'
+  hr_bpm      'Mean Heart Rate (BPM)'
   rmssd_ms         'RMSSD (ms)'
   sdnn_ms          'SDNN (ms)'
   pnn50_pct        'pNN50 (%)'

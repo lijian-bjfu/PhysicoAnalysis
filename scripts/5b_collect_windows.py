@@ -22,6 +22,8 @@ SRC_ROOT = (DATA_DIR / paths["windowing"]).resolve()                 # e.g. data
 OUT_ROOT = (SRC_ROOT / "collected").resolve()                        # e.g. .../windowing/local/collected
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
 APPLY_TO: List[str] = DS.get("windowing", {}).get("apply_to", ["rr"])
+# 读取当前的切窗方法
+WINDOW_SETTING = DS["windowing"]
 
 PRE_SID = DATASETS[ACTIVE_DATA]["preview_sids"]
 
@@ -259,6 +261,69 @@ def main():
         visible["src_level_dir"] = visible["level"].map(level_map)
 
     print(f"[debug] visible(after attach src_level_dir) has column? { 'src_level_dir' in visible.columns }")
+
+    # 3.5) 对 meaning 列进行“精确定义化”更新（仅当切窗模式与最终窗数量严格一致）
+    # 目标：当 windowing.use == 'events_labeled_windows' 时，用 mode['windows'][i]['name'] 覆盖最终窗的 meaning。
+    # 约束：仅当每个被试的最终可见窗口数量 == mode['windows'] 的窗口数量，且 final_order 恰为 1..w_n 连续序列时才更新。
+    ws = WINDOW_SETTING
+    use = (ws or {}).get("use")
+    if use == "events_labeled_windows":
+        # settings.py uses key 'modes' (plural). Keep backward-compat with older 'mode'.
+        modes = (ws or {}).get("modes")
+        if modes is None:
+            modes = (ws or {}).get("mode")
+        mode = ((modes or {}) if isinstance(modes, dict) else {}).get("events_labeled_windows")
+        if not mode or ("windows" not in mode) or (not isinstance(mode["windows"], list)):
+            avail = list(modes.keys()) if isinstance(modes, dict) else []
+            print(
+                "[meaning] use=events_labeled_windows，但 settings.windowing.modes/events_labeled_windows 缺失或格式不正确；"
+                f"跳过 meaning 精确定义更新。可用模式键: {avail}"
+            )
+        else:
+            win_defs = mode["windows"]
+            win_names = [str(w.get("name", "")).strip() for w in win_defs]
+            w_n = len(win_names)
+            if w_n == 0:
+                print("[meaning] use=events_labeled_windows，但 mode['windows'] 为空；跳过 meaning 精确定义更新。")
+            else:
+                # 逐被试一致性检查：每个被试必须恰好拥有 w_n 个最终可见窗，并且 final_order 必须连续覆盖 1..w_n
+                grp = visible.groupby("subject_id")
+                # cnt = grp.size().astype(int)
+
+                # final_order 集合完整性（防止缺号/重号）
+                required_orders = set(range(1, w_n + 1))
+                bad_subjects = []
+                for sid, sub in grp:
+                    orders = set(sub["final_order"].astype(int).tolist())
+                    if (len(sub) != w_n) or (orders != required_orders):
+                        bad_subjects.append((sid, int(len(sub)), sorted(list(orders))[:20]))
+
+                if bad_subjects:
+                    # 只展示前若干个，避免刷屏
+                    preview = bad_subjects[:12]
+                    msg_lines = [
+                        "[meaning] 已设置 use=events_labeled_windows，但 events_labeled_windows 的窗口数量与当前最终窗数量不一致，或 final_order 不连续。",
+                        f"          期望每位被试 final_window_count == {w_n} 且 final_order == 1..{w_n}。",
+                        f"          不一致被试数：{len(bad_subjects)}（仅展示前 {len(preview)} 个）：",
+                    ]
+                    for sid, n, orders_head in preview:
+                        msg_lines.append(f"            - {sid}: final_windows={n}, final_order(head)={orders_head}")
+                    msg_lines.append("          因为不满足严格一致性约束，meaning 将保持默认/上游含义，不做覆盖更新。")
+                    print("\n".join(msg_lines))
+                else:
+                    # 构建 final_order -> name 映射并覆盖 meaning
+                    map_df = pd.DataFrame({
+                        "final_order": list(range(1, w_n + 1)),
+                        "_meaning_new": win_names,
+                    })
+                    visible = visible.merge(map_df, on="final_order", how="left", validate="m:1")
+                    visible["meaning"] = visible["_meaning_new"].fillna(visible.get("meaning", ""))
+                    visible.drop(columns=["_meaning_new"], inplace=True)
+                    print(f"[meaning] use=events_labeled_windows 且窗口数量一致（w_n={w_n}）；已用 settings 中 windows[].name 覆盖最终窗 meaning。")
+    else:
+        print(f"[meaning] use={use!r}；meaning 将保持默认/上游含义（不做精确定义覆盖）。")
+            
+       
 
     # 4) 输出 collected_index.csv
     collected_index = visible[[

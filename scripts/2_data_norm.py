@@ -54,7 +54,7 @@ def _save_standard(std: pd.DataFrame,
                    sig: str,
                    make_preview: bool = True) -> tuple[Path, str]:
     """
-    方案A：根据原始 sig 决定“形状保障 + 文件名 + 扩展名”，一次性完成。
+    根据原始 sig 决定“形状保障 + 文件名 + 扩展名”，一次性完成。
     返回：(最终文件路径, 最终信号名)
       - 连续信号(ecg/resp/ppg/acc) → to_continuous → <sid>_<sig>.parquet
       - 逐搏(rr/ppi)                → to_rr         → <sid>_rr.csv

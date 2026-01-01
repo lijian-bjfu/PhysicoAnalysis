@@ -26,8 +26,29 @@ from settings import DATASETS, ACTIVE_DATA, DATA_DIR, SIGNAL_ALIASES, SCHEMA, PA
 DS = DATASETS[ACTIVE_DATA]
 paths = DS["paths"]
 SRC_DIR = (DATA_DIR / paths["final"]).resolve()
-LONGTABLE = (DATA_DIR / paths["final"] / "long_table.csv").resolve()
-WIDETABLE = (DATA_DIR / paths["final"] / "wide_table.csv").resolve()
+
+# ---- Choose which input tables to use ----
+# If True, use the *original* snapshot tables; if False, use the latest regenerated tables.
+use_original_data = False
+
+LONGORIG = (DATA_DIR / paths["final"] / "long_table_original.csv").resolve()
+WIDEORIG = (DATA_DIR / paths["final"] / "wide_table_original.csv").resolve()
+LONGUSE  = (DATA_DIR / paths["final"] / "long_table.csv").resolve()
+WIDEUSE  = (DATA_DIR / paths["final"] / "wide_table.csv").resolve()
+
+# Select file paths (Python ternary expression)
+LONGTABLE = LONGORIG if use_original_data else LONGUSE
+WIDETABLE = WIDEORIG if use_original_data else WIDEUSE
+
+# Guardrails: fail fast with a clear error if the expected file is missing
+if not LONGTABLE.exists():
+    raise FileNotFoundError(f"[error] LONGTABLE not found: {LONGTABLE}")
+if not WIDETABLE.exists():
+    raise FileNotFoundError(f"[error] WIDETABLE not found: {WIDETABLE}")
+
+print(f"[info] use_original_data={use_original_data}")
+print(f"[info] LONGTABLE → {LONGTABLE.name}")
+print(f"[info] WIDETABLE → {WIDETABLE.name}")
 OUT_ROOT = (SRC_DIR / "data_explor" ).resolve()
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -61,7 +82,7 @@ exclude = []
 # 是否启用高亮（关闭时不高亮、也不显示高亮图注）
 enable_highlight = True
 # 突出显示某些个案
-highlight_subject = ["P028","P009","P021","P017"]
+highlight_subject = ["P019","P007","P037","P021","P025"] #["P028","P009","P021","P017"]
 
 # 分组变量，0=实验组，1=对照组
 condition = "task"
@@ -70,12 +91,12 @@ condition = "task"
 # X: predictor
 # Y: outcome
 
-X = "stai_T2"        
+X = "fss_c"        
 Y = "stai_T3"
 # Z在不同模型下有不同含义。
 # 在三变量图中表示: third variable for color/size encoding 
 # 在交互图中表示控制变量
-Z = ""
+Z = "stai_T2"
 
 # 用户选择绘制哪些图
 # draw_3vars_relathion_plot 打开后，绘制 scatter_by_group 的图

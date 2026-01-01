@@ -32,7 +32,7 @@ OUT_ROOT.mkdir(parents=True, exist_ok=True)
 dependent_vars = [
     # "hf_log_ms2",
     # "rmssd_ms",
-    # "mean_hr_bpm",
+    # "hr_bpm",
     "smm",
     "sbm",
 ]

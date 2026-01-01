@@ -18,7 +18,7 @@ VARIABLE LABELS
   resp_log_amp     '呼吸幅度 (Log)'
   resp_rate_bpm    '呼吸频率 (BPM)'
   resp_rate_bpm_ws '呼吸频率 (去中化)'
-  mean_hr_bpm      '平均心率 (BPM)'
+  hr_bpm      '平均心率 (BPM)'
   rmssd_ms         '心率时域 RMSSD (ms)'
   sdnn_ms          '心率时域 SDNN (ms)'
   pnn50_pct        '心率时域 pNN50 (%)'

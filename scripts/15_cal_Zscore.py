@@ -22,7 +22,7 @@ from settings import DATASETS, ACTIVE_DATA, DATA_DIR
 #
 # 读取：final/long_table.csv（只用 gap 角色下的 t_id=1,2,3）
 # 变量：
-#   - 生理（时域）：mean_hr_bpm -> hr；rmssd_ms -> rmssd
+#   - 生理（时域）：hr_bpm -> hr；rmssd_ms -> rmssd
 #   - RSA：rsa_ms -> rsa；rsa_log_ms -> rsa_log
 #   - 心理：stai
 #   - 保留的协变量：acc_enmo_mean_ws, resp_rate_bpm_ws, acc_enmo_mean_bs, resp_rate_bpm_bs
@@ -59,7 +59,7 @@ OUT_FILE = OUT_ROOT / "zscore_table.csv"
 # 想要参与 z-change 的原始列（来自 long_table）
 INDEX_RAW_TO_LABEL: Dict[str, str] = {
     # 时域（简名）
-    "mean_hr_bpm": "hr",
+    "hr_bpm": "hr",
     "rmssd_ms": "rmssd",
     # RSA（两套）
     "rsa_ms": "rsa",

@@ -28,7 +28,7 @@ from settings import PARAMS
 
 输出
 - 单行 DataFrame，列：
-  ['mean_hr_bpm','rmssd_ms','sdnn_ms','pnn50_pct','sd1_ms','sd2_ms']
+  ['hr_bpm','rmssd_ms','sdnn_ms','pnn50_pct','sd1_ms','sd2_ms']
 
 注意
 - pNNx 的门槛 x 从 PARAMS['pnn_threshold_ms'] 读取（默认 50.0）。
@@ -57,7 +57,7 @@ def _pnn_pct(rr_ms: np.ndarray, threshold_ms: float) -> float:
     return float(100.0 * (diff > threshold_ms).mean())
 
 
-def _mean_hr_bpm(rr_ms: np.ndarray) -> float:
+def _hr_bpm(rr_ms: np.ndarray) -> float:
     if rr_ms.size == 0:
         return np.nan
     mean_rr = float(np.mean(rr_ms))
@@ -93,7 +93,7 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
     resp_df : 可选；占位符，与频域模块签名保持一致，时域不使用。
 
     返回
-    单行 DataFrame：['mean_hr_bpm','rmssd_ms','sdnn_ms','pnn50_pct','sd1_ms','sd2_ms']。
+    单行 DataFrame：['hr_bpm','rmssd_ms','sdnn_ms','pnn50_pct','sd1_ms','sd2_ms']。
     """
     # 固定为 pNN50，避免口径歧义
     pnn_threshold = 50.0  # 固定为 pNN50，避免口径歧义
@@ -104,7 +104,7 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
     if rr is None:
         # 容错：列名不对时直接返回 NaN 行
         return pd.DataFrame([{
-            'mean_hr_bpm': np.nan,
+            'hr_bpm': np.nan,
             'rmssd_ms': np.nan,
             'sdnn_ms': np.nan,
             'pnn50_pct': np.nan,
@@ -114,14 +114,14 @@ def features_segment(rr_df: pd.DataFrame, resp_df: Optional[pd.DataFrame] = None
     rr = rr.to_numpy(dtype=float)
 
     # 计算指标
-    mean_hr = _mean_hr_bpm(rr)
+    mean_hr = _hr_bpm(rr)
     rmssd = _rmssd_ms(rr)
     sdnn = _sdnn_ms(rr, ddof=sdnn_ddof)
     pnn = _pnn_pct(rr, threshold_ms=pnn_threshold)
     sd1, sd2 = _poincare_sd1_sd2(rr)
 
     out = pd.DataFrame([{
-        'mean_hr_bpm': mean_hr,
+        'hr_bpm': mean_hr,
         'rmssd_ms': rmssd,
         'sdnn_ms': sdnn,
         'pnn50_pct': pnn,

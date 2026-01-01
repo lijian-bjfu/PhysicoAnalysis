@@ -117,7 +117,7 @@ def _resolve_cfg():
         preview_sids = []
 
     use_mode = wcfg.get("use", "events").strip()
-    apply_to = wcfg.get("apply_to", ["rr"])  # e.g. ["rr","resp","acc","events"]
+    apply_to = wcfg.get("apply_to", ["rr"])  # e.g. ["rr","resp","acc","events","hr"]
 
     return {
         "paths": {"rr": SRC_RR_DIR, "other": SRC_OTHER_DIR, "out": OUT_BASE},
@@ -651,27 +651,67 @@ def _save_windows_for_subject(sid: str, cfg: dict, windows_df: pd.DataFrame, out
     """
     def _load_signal(signal: str) -> tuple[pd.DataFrame | None, str]:
         # cover：从 confirmed/norm 读取
-        def _try_load(paths: list[Path], cols_map: dict[str, str], tcol_name: str) -> tuple[pd.DataFrame | None, str]:
+        def _try_load(
+            paths: list[Path],
+            cols_map: dict[str, str] | None,
+            tcol_name: str,
+            required_cols: list[str] | None = None,
+        ) -> tuple[pd.DataFrame | None, str]:
+            """Try loading from candidate paths; return (df, tcol_name) on first success.
+
+            Success criteria:
+            - file exists and non-empty
+            - required columns exist after renaming
+            - time column can be parsed to numeric and has at least 1 valid row
+            """
             for p in paths:
                 df = read_table_if_exists(p, cols_map)
-                if df is not None and len(df):
-                    return df, tcol_name
+                if df is None or len(df) == 0:
+                    continue
+
+                # Validate required columns after renaming.
+                req = list(required_cols) if required_cols else [tcol_name]
+                missing = [c for c in req if c not in df.columns]
+                if missing:
+                    print(
+                        f"[warn] {sid} {signal}: 文件 {p.name} 缺少列 {missing}，已跳过。现有列: {list(df.columns)}"
+                    )
+                    continue
+
+                # Coerce time to numeric for reliable window slicing.
+                df[tcol_name] = pd.to_numeric(df[tcol_name], errors="coerce")
+                df = df.dropna(subset=[tcol_name]).sort_values(tcol_name).reset_index(drop=True)
+                if len(df) == 0:
+                    continue
+
+                return df, tcol_name
+
             return None, ""
+
         if signal == "rr":
             paths = [cfg["paths"]["rr"] / f"{sid}_rr.csv", cfg["paths"]["rr"] / f"{sid}_rr.parquet"]
-            return _try_load(paths, {"t_s":"t_s", "rr_ms":"rr_ms"}, "t_s")
+            return _try_load(paths, {"t_s":"t_s", "rr_ms":"rr_ms"}, "t_s", required_cols=["t_s","rr_ms"])
+        if signal == "hr":
+            paths = [cfg["paths"]["other"] / f"{sid}_hr.csv", cfg["paths"]["other"] / f"{sid}_hr.parquet"]
+            # SCHEMA['hr'] is already t_s,bpm, so no renaming needed
+            return _try_load(paths, None, "t_s", required_cols=["t_s","bpm"])
         if signal == "resp":
             paths = [cfg["paths"]["other"] / f"{sid}_resp.csv", cfg["paths"]["other"] / f"{sid}_resp.parquet"]
-            return _try_load(paths, {SCHEMA["resp"]["t"]:"time_s", SCHEMA["resp"]["v"]:"value"}, "time_s")
+            return _try_load(paths, {SCHEMA["resp"]["t"]:"time_s", SCHEMA["resp"]["v"]:"value"}, "time_s", required_cols=["time_s","value"])
         if signal == "ecg":
             paths = [cfg["paths"]["other"] / f"{sid}_ecg.csv", cfg["paths"]["other"] / f"{sid}_ecg.parquet"]
-            return _try_load(paths, {SCHEMA["ecg"]["t"]:"time_s", SCHEMA["ecg"]["v"]:"value"}, "time_s")
+            return _try_load(paths, {SCHEMA["ecg"]["t"]:"time_s", SCHEMA["ecg"]["v"]:"value"}, "time_s", required_cols=["time_s","value"])
         if signal == "acc":
             paths = [cfg["paths"]["other"] / f"{sid}_acc.csv", cfg["paths"]["other"] / f"{sid}_acc.parquet"]
-            return _try_load(paths, {SCHEMA["acc"]["t"]:"time_s", SCHEMA["acc"]["vx"]:"value_x", SCHEMA["acc"]["vy"]:"value_y", SCHEMA["acc"]["vz"]:"value_z"}, "time_s")
+            return _try_load(
+                paths,
+                {SCHEMA["acc"]["t"]:"time_s", SCHEMA["acc"]["vx"]:"value_x", SCHEMA["acc"]["vy"]:"value_y", SCHEMA["acc"]["vz"]:"value_z"},
+                "time_s",
+                required_cols=["time_s","value_x","value_y","value_z"],
+            )
         if signal == "events":
             paths = [cfg["paths"]["other"] / f"{sid}_events.csv", cfg["paths"]["other"] / f"{sid}_events.parquet"]
-            return _try_load(paths, {SCHEMA["events"]["t"]:"time_s", SCHEMA["events"]["label"]:"events"}, "time_s")
+            return _try_load(paths, {SCHEMA["events"]["t"]:"time_s", SCHEMA["events"]["label"]:"events"}, "time_s", required_cols=["time_s","events"])
         return None, ""
 
     saved_counts = {}
@@ -701,6 +741,20 @@ def _save_windows_for_subject(sid: str, cfg: dict, windows_df: pd.DataFrame, out
         if n_saved < expect:
             miss_str = ",".join([f"w{int(x):02d}" for x in missing_ids]) if missing_ids else ""
             print(f"[warn] {sid} {signal}: 实际保存 {n_saved}/{expect}，缺失窗口：{miss_str}")
+        if expect > 0 and n_saved == 0:
+            try:
+                sig_min = float(df_sig[tcol].min())
+                sig_max = float(df_sig[tcol].max())
+                win_min = float(windows_df["t_start_s"].min())
+                win_max = float(windows_df["t_end_s"].max())
+                print(
+                    f"[hint] {sid} {signal}: 全部窗口无数据。"
+                    f"信号时间范围=[{fmt_s(sig_min)}~{fmt_s(sig_max)}]，"
+                    f"窗口范围=[{fmt_s(win_min)}~{fmt_s(win_max)}]。"
+                    f"请检查该信号的时间基准是否与RR/事件一致，或是否存在单位不一致（ms vs s）。"
+                )
+            except Exception:
+                pass
         saved_counts[signal] = n_saved
         print(f"[save] {sid} {signal}: {n_saved} 个窗口 → {out_dir}")
     return saved_counts

@@ -1,7 +1,7 @@
 ﻿* Encoding: UTF-8.
 
 * 生理指标混合方差，任务 X 测量过程+ WITH acc_enmo_mean_ws.
-MIXED mean_hr_bpm BY task phase_level_code WITH acc_enmo_mean_ws
+MIXED hr_bpm BY task phase_level_code WITH acc_enmo_mean_ws
   /CRITERIA=DFMETHOD(SATTERTHWAITE) CIN(95) MXITER(100) MXSTEP(10) SCORING(1) 
     SINGULAR(0.000000000001) HCONVERGE(0.00000001, RELATIVE) LCONVERGE(0, ABSOLUTE) PCONVERGE(0, 
     ABSOLUTE)
@@ -15,7 +15,7 @@ MIXED mean_hr_bpm BY task phase_level_code WITH acc_enmo_mean_ws
   /EMMEANS=TABLES(phase_level_code*task) COMPARE(phase_level_code) ADJ(BONFERRONI).
 
 * 生理指标混合方差，任务 X 测量后时间点.
-MIXED mean_hr_bpm BY t_id task
+MIXED hr_bpm BY t_id task
   /CRITERIA=DFMETHOD(SATTERTHWAITE) CIN(95) MXITER(100) MXSTEP(10) SCORING(1) 
     SINGULAR(0.000000000001) HCONVERGE(0.00000001, RELATIVE) LCONVERGE(0, ABSOLUTE) PCONVERGE(0, 
     ABSOLUTE)

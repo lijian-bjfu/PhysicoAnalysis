@@ -110,14 +110,6 @@ PARAMS = {
     # 设备 RR 与 ECG R 峰配对时的最近邻容差（毫秒）。仅用于 QC/可视化或后续扩展，
     # 不改变主要修复逻辑。
     "ecg_pair_tol_ms": 120.0,
-
-    # ---- parameters for hrv_acc.py & hrv_resp.py (added) ----- #
-    # 加速度：1 g 的数值（与原始单位一致）。你的样例是 ~±1000，显然单位为 mg，因此设 1000.0
-    "acc_g": 1000.0,
-
-    # ENMO 阈值（与原始单位一致，mg）。用于计算 acc_motion_frac（>阈值的占比）。
-    # 胸带/躯干 20–40 mg 常见；手腕/上肢可适当调高（如 40–60 mg）
-    "acc_enmo_thresh": 30.0,
 }
 
 DATASETS = {
@@ -185,7 +177,7 @@ DATASETS = {
             "method": "cover", # cover | subdivide
 
             # 切到哪些信号（不存在则自动跳过）
-            "apply_to": ["rr","resp","acc","ecg"],
+            "apply_to": ["rr","resp","acc","ecg","hr"],
 
             # 各模式参数（仅在被选中时读取）
             "modes": {
@@ -207,7 +199,7 @@ DATASETS = {
                 # 三选一：给 [start_s,end_s]；或 [start_s,win_len_s]；
                 # 时间按照相对值设置，例如开始时间设为 12，
                 # 会从数据开始位置向后偏移12秒作为切窗开始
-                "single": {"start_s": 40, "end_s": None, "win_len_s": None},
+                "single": {"start_s": 20, "end_s": None, "win_len_s": None},
 
                 # 3) 滑窗：在 [start_s,end_s] 范围内按 win_len/stride 切窗
                 # 时间按照相对值设置。例如开始时间设为 12, 
@@ -314,7 +306,7 @@ DATASETS = {
             # "hf_band_used", 
             # "hf_center_hz",
             # *-- 时域特征 --*
-            "mean_hr_bpm",
+            "hr_bpm",
             "rmssd_ms",
             "sdnn_ms",
             "pnn50_pct",
@@ -442,7 +434,7 @@ DATASETS = {
             "lf_ms2", 
             "lf_log_ms2", 
             # -- 时域特征
-            "mean_hr_bpm",
+            "hr_bpm",
             "rmssd_ms",
             "sdnn_ms",
             "pnn50_pct",
@@ -557,7 +549,7 @@ PHYSICO_LABELS = {
     "hf_log_ms2": "HF功率自然对数 ln(ms²)",
     "lf_ms2": "",
     "lf_log_ms2": "LF功率自然对数 ln(ms²)",
-    "mean_hr_bpm": "平均心率（次/分）",
+    "hr_bpm": "平均心率（次/分）",
     "rmssd_ms": "RMSSD（毫秒）",
     "sdnn_ms": "SDNN（毫秒）",
     "pnn50_pct": "pNN50（百分比）",

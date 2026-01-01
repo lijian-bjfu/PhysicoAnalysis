@@ -36,7 +36,7 @@ OUT_ROOT.mkdir(parents=True, exist_ok=True)
 dependent_vars = [
     "hf_log_ms2",
     "rmssd_ms",
-    "mean_hr_bpm",
+    "hr_bpm",
 ]
 # 被测 ID 变量名,该变量为字符串，例如 "P006S001T002R001"
 subject_id = "subject_id"
