@@ -26,7 +26,7 @@ from settings import DATASETS, ACTIVE_DATA, DATA_DIR, SCHEMA, PARAMS  # type: ig
 
 
 # ==========================================================
-# I/O（必须使用你现有的 settings 路径体系）
+# I/O（必须使用 settings 路径体系）
 # ==========================================================
 DS = DATASETS[ACTIVE_DATA]
 paths = DS["paths"]
@@ -95,7 +95,7 @@ WIN = ['w01','w02','w03','w04','w05','w06']
 # ==========================================================
 # "longest": 仅保留最长连续有效片段（推荐，最稳健，便于后续 RSA 单指标计算）
 # "multi"  : 保留所有通过判定的连续有效片段（其余置 NaN；后续 RSA 计算需额外聚合策略）
-CLEAN_MODE = str(PARAMS.get("resp_clean_mode", "multi"))
+CLEAN_MODE = "multi"
 
 
 # ==========================================================

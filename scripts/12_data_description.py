@@ -33,8 +33,8 @@ dependent_vars = [
     # "hf_log_ms2",
     # "rmssd_ms",
     # "hr_bpm",
-    "smm",
-    "sbm",
+    "stai",
+    # "sbm",
 ]
 # 被测 ID 变量名,该变量为字符串，例如 "P006S001T002R001"
 subject_id = "subject_id"
@@ -49,42 +49,42 @@ time = "t_id"
 # "P012": {"color": "blue", "alpha": 0.8, "linewidth": 2.0}
 SID_colormarker = {
     # cond 1
-    # "P021": {
-    #     "color": "red",
+    "P032": {
+        "color": "red",
+        "alpha": 0.9,
+        "linewidth": 2.0,
+    },
+    # "P003": {
+    #     "color": "green",
     #     "alpha": 0.9,
     #     "linewidth": 2.0,
     # },
-    "P003": {
-        "color": "green",
-        "alpha": 0.9,
-        "linewidth": 2.0,
-    },
-    "P017": {
-        "color": "pink",
-        "alpha": 0.9,
-        "linewidth": 2.0,
-    },
-    "P001": {
-        "color": "brown",
-        "alpha": 0.9,
-        "linewidth": 2.0,
-    },
-    "P007": {
-        "color": "blue",
-        "alpha": 0.9,
-        "linewidth": 2.0,
-    },
-    # cond 2
-    "P008": {
-        "color": "orange",
-        "alpha": 0.9,
-        "linewidth": 2.0,
-    },
-    "P024": {
-        "color": "pink",
-        "alpha": 0.9,
-        "linewidth": 2.0,
-    },
+    # "P017": {
+    #     "color": "pink",
+    #     "alpha": 0.9,
+    #     "linewidth": 2.0,
+    # },
+    # "P001": {
+    #     "color": "brown",
+    #     "alpha": 0.9,
+    #     "linewidth": 2.0,
+    # },
+    # "P007": {
+    #     "color": "blue",
+    #     "alpha": 0.9,
+    #     "linewidth": 2.0,
+    # },
+    # # cond 2
+    # "P008": {
+    #     "color": "orange",
+    #     "alpha": 0.9,
+    #     "linewidth": 2.0,
+    # },
+    # "P024": {
+    #     "color": "pink",
+    #     "alpha": 0.9,
+    #     "linewidth": 2.0,
+    # },
 }
 
 

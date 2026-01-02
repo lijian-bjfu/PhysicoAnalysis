@@ -82,7 +82,8 @@ exclude = []
 # 是否启用高亮（关闭时不高亮、也不显示高亮图注）
 enable_highlight = True
 # 突出显示某些个案
-highlight_subject = ["P019","P007","P037","P021","P025"] #["P028","P009","P021","P017"]
+# p040(35) P30(24) P051(46)
+highlight_subject = ["P030","P051","P040"] #["P028","P009","P021","P017"]
 
 # 分组变量，0=实验组，1=对照组
 condition = "task"
